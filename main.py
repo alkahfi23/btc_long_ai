@@ -17,9 +17,8 @@ session = HTTP(api_key=API_KEY, api_secret=API_SECRET, testnet=False)
 def get_candles(symbol, interval=1, limit=100):
     klines = session.get_kline(category="linear", symbol=symbol, interval=str(interval), limit=limit)
     if "result" in data and "list" in data["result"]:
-    df = pd.DataFrame(data["result"]["list"], columns=[
-        "timestamp", "open", "high", "low", "close", "volume", "turnover"
-    ])
+    df = pd.DataFrame(data["result"]["list"],columns=[
+        "timestamp", "open", "high", "low", "close", "volume", "turnover"])
     # lanjutkan proses
     else:
     st.error("❌ Gagal mengambil data dari API Bybit. Cek API Key atau jaringan.")
