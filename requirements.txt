@@ -6,3 +6,4 @@ plotly
 pybit
 scikit-learn
 openai
+bybit-python
