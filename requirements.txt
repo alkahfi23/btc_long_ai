@@ -3,6 +3,3 @@ pandas
 requests
 ta
 plotly
-pybit
-scikit-learn
-openai
