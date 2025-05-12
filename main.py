@@ -6,9 +6,25 @@ import ta
 import numpy as np
 
 st.set_page_config(page_title="AI BTC Signal Analyzer", layout="wide")
+
+@st.cache_data(ttl=3600)
+def get_all_symbols():
+    url = "https://api.bybit.com/v5/market/instruments"
+    params = {"category": "linear"}
+    try:
+        r = requests.get(url, params=params, timeout=10)
+        data = r.json()
+        if "result" in data and "list" in data["result"]:
+            return sorted([item["symbol"] for item in data["result"]["list"] if "USDT" in item["symbol"]])
+        else:
+            return ["BTCUSDT"]
+    except Exception as e:
+        st.warning(f"⚠️ Gagal mengambil simbol: {e}")
+        return ["BTCUSDT"]
 st.title("📊 AI BTC Signal Analyzer (LONG & SHORT)")
 
-symbol = "BTCUSDT"
+symbols = get_all_symbols()
+symbol = st.sidebar.selectbox("🔄 Pilih Pair Trading:", symbols, index=symbols.index("BTCUSDT") if "BTCUSDT" in symbols else 0)
 interval = "1"
 limit = 100
 
