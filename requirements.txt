@@ -3,5 +3,3 @@ pandas
 requests
 ta
 plotly
-bybit
-openai
