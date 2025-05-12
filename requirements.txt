@@ -5,3 +5,5 @@ ta
 plotly
 pybit
 scikit-learn
+bybit
+openai
