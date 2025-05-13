@@ -9,18 +9,19 @@ st.set_page_config(page_title="AI BTC Signal Analyzer", layout="wide")
 
 @st.cache_data(ttl=3600)
 def get_all_symbols():
-    url = "https://api.bybit.com/v5/market/instruments"
+    url = "https://api.bybit.com/v5/market/instruments-info"
     params = {"category": "linear"}
     try:
         r = requests.get(url, params=params, timeout=10)
         data = r.json()
-        if "result" in data and "list" in data["result"]:
+        if data.get("retCode") == 0 and "result" in data and "list" in data["result"]:
             return sorted([item["symbol"] for item in data["result"]["list"] if "USDT" in item["symbol"]])
         else:
             return ["BTCUSDT"]
     except Exception as e:
         st.warning(f"⚠️ Gagal mengambil simbol: {e}")
         return ["BTCUSDT"]
+
 st.title("📊 AI BTC Signal Analyzer (LONG & SHORT)")
 
 symbols = get_all_symbols()
