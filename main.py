@@ -16,7 +16,7 @@ def get_all_symbols():
         data = res.json()
         return sorted([i["symbol"] for i in data["result"]["list"] if "USDT" in i["symbol"]])
     except:
-        return ["BTCUSDT"]
+        return ["symbol"]
 
 @st.cache_data(ttl=60)
 def get_kline_data(symbol, interval="1", limit=100):
