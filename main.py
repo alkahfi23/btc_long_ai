@@ -1,188 +1,170 @@
+# ========== IMPORT ========== #
 import streamlit as st
-import requests
 import pandas as pd
 import numpy as np
-from sklearn.preprocessing import MinMaxScaler
-from keras.models import Sequential, load_model
-from keras.layers import LSTM, Dense, Dropout
-import plotly.graph_objects as go
+import requests
+import datetime
 import ta
-from datetime import datetime
+import plotly.graph_objects as go
+from sklearn.preprocessing import MinMaxScaler
+from keras.models import Sequential
+from keras.layers import LSTM, Dense
 
-# ========== KONFIGURASI ========== #
-st.set_page_config(page_title="AI BTC Signal Analyzer", layout="wide")
-st.title("🤖 AI BTC Signal Analyzer (Multi-Timeframe Strategy)")
+# ========== STREAMLIT CONFIG ========== #
+st.set_page_config(page_title="AI BTC/ETH Signal Analyzer", layout="wide")
+st.title("🤖 AI BTC/ETH Signal Analyzer (with LSTM & Chart)")
 
-# ========== API ========== #
-@st.cache_data(ttl=60)
-def get_historical_data(symbol, interval="1", limit=500):
-    url = "https://api.bybit.com/v5/market/kline"
-    params = {"category": "linear", "symbol": symbol, "interval": interval, "limit": limit}
-    try:
-        r = requests.get(url, params=params, timeout=10)
-        data = r.json()
-        df = pd.DataFrame(data["result"]["list"], columns=["timestamp", "open", "high", "low", "close", "volume", "turnover"])
-        df = df.astype(float)
-        df["timestamp"] = pd.to_datetime(df["timestamp"], unit="ms")
-        df.set_index("timestamp", inplace=True)
-        return df
-    except Exception as e:
-        print(f"Error: {e}")
-        return pd.DataFrame()
+# ========== API HISTORICAL DATA ========== #
+@st.cache_data(ttl=600)
+def get_historical_data(symbol="BTCUSDT", interval="60"):
+    dfs = []
+    limit = 200  # Max per API call
+    now = int(datetime.datetime.now().timestamp() * 1000)
+    ms_per_candle = int(interval) * 60 * 1000
+    lookback = 365 * 24 * 60 // int(interval)
+
+    for i in range(0, lookback, limit):
+        start = now - (i + limit) * ms_per_candle
+        end = now - i * ms_per_candle
+        url = f"https://api.bybit.com/v5/market/kline"
+        params = {
+            "category": "linear",
+            "symbol": symbol,
+            "interval": interval,
+            "limit": limit,
+            "start": start,
+            "end": end
+        }
+        r = requests.get(url, params=params)
+        if r.status_code == 200 and "result" in r.json():
+            data = r.json()["result"]["list"]
+            df = pd.DataFrame(data, columns=["timestamp", "open", "high", "low", "close", "volume", "turnover"])
+            df = df.astype(float)
+            df["timestamp"] = pd.to_datetime(df["timestamp"], unit="ms")
+            df.set_index("timestamp", inplace=True)
+            dfs.append(df)
+    return pd.concat(dfs).sort_index() if dfs else pd.DataFrame()
 
 # ========== INDICATORS ========== #
 def add_indicators(df):
-    df["rsi"] = ta.momentum.RSIIndicator(df["close"], window=14).rsi()
+    df["rsi"] = ta.momentum.RSIIndicator(df["close"]).rsi()
     df["ema_fast"] = ta.trend.EMAIndicator(df["close"], window=5).ema_indicator()
     df["ema_slow"] = ta.trend.EMAIndicator(df["close"], window=21).ema_indicator()
     df["macd"] = ta.trend.MACD(df["close"]).macd()
     bb = ta.volatility.BollingerBands(df["close"])
     df["bb_high"] = bb.bollinger_hband()
     df["bb_low"] = bb.bollinger_lband()
+    df["atr"] = ta.volatility.AverageTrueRange(df["high"], df["low"], df["close"]).average_true_range()
+    ichimoku = ta.trend.IchimokuIndicator(df["high"], df["low"])
+    df["ichimoku_a"] = ichimoku.ichimoku_a()
+    df["ichimoku_b"] = ichimoku.ichimoku_b()
     return df
 
-# ========== LSTM ========== #
-def create_lstm_model(input_shape):
-    model = Sequential()
-    model.add(LSTM(64, return_sequences=False, input_shape=input_shape))
-    model.add(Dropout(0.2))  # Dropout untuk mencegah overfitting
-    model.add(Dense(1))  # Layer output untuk prediksi harga
-    model.compile(optimizer='adam', loss='mean_squared_error')
-    return model
-
-def preprocess_data(df, n_steps=30):
-    df = df[["close", "rsi", "macd", "ema_fast", "ema_slow"]].dropna()  # Pilih fitur yang akan digunakan
+# ========== LSTM MODEL ========== #
+def train_lstm_model(df, n_steps=60):
+    data = df[['close']].dropna()
     scaler = MinMaxScaler()
-    scaled_data = scaler.fit_transform(df.values)  # Normalisasi data
+    scaled = scaler.fit_transform(data)
 
     X, y = [], []
-    for i in range(n_steps, len(scaled_data)):
-        X.append(scaled_data[i-n_steps:i])  # Ambil data sebelumnya untuk input
-        y.append(scaled_data[i, 0])  # Target adalah harga close
-
+    for i in range(n_steps, len(scaled)):
+        X.append(scaled[i-n_steps:i])
+        y.append(scaled[i])
     X, y = np.array(X), np.array(y)
-    return X, y, scaler
 
-# Fungsi untuk memuat model dan melakukan prediksi
-def predict_lstm_trained(df, model, scaler, n_steps=30):
-    df = df[["close", "rsi", "macd", "ema_fast", "ema_slow"]].dropna()
-    data_scaled = scaler.transform(df.values)
-    
-    # Membuat input sesuai dengan panjang langkah yang diperlukan
-    X = []
-    for i in range(n_steps, len(data_scaled)):
-        X.append(data_scaled[i-n_steps:i])
-    
-    X = np.array(X)
+    model = Sequential()
+    model.add(LSTM(64, return_sequences=False, input_shape=(n_steps, 1)))
+    model.add(Dense(1))
+    model.compile(optimizer="adam", loss="mse")
+    model.fit(X, y, epochs=10, batch_size=32, verbose=0)
 
-    # Prediksi harga
-    predicted_scaled = model.predict(X[-1].reshape(1, n_steps, X.shape[2]))[0][0]
-    predicted_price = scaler.inverse_transform([[predicted_scaled, 0, 0, 0, 0]])[0][0]
-    
-    return predicted_price
+    return model, scaler
 
-# ========== PREDIKSI MODEL LSTM ========== #
-btc_data = get_historical_data("BTCUSDT", interval="1", limit=500)
-eth_data = get_historical_data("ETHUSDT", interval="1", limit=500)
+def predict_future_price(df, model, scaler, n_steps=60):
+    last_seq = df[['close']].dropna().iloc[-n_steps:]
+    scaled_input = scaler.transform(last_seq)
+    input_reshaped = scaled_input.reshape((1, n_steps, 1))
+    pred_scaled = model.predict(input_reshaped)[0][0]
+    return scaler.inverse_transform([[pred_scaled]])[0][0]
 
-btc_data = add_indicators(btc_data)
-eth_data = add_indicators(eth_data)
+# ========== FIBONACCI ========== #
+def fibonacci_levels(df):
+    high, low = df["high"].max(), df["low"].min()
+    diff = high - low
+    return {
+        "0.0%": high,
+        "23.6%": high - 0.236 * diff,
+        "38.2%": high - 0.382 * diff,
+        "50.0%": high - 0.5 * diff,
+        "61.8%": high - 0.618 * diff,
+        "100.0%": low
+    }
 
-# Preprocessing untuk LSTM
-X_btc, y_btc, btc_scaler = preprocess_data(btc_data)
-X_eth, y_eth, eth_scaler = preprocess_data(eth_data)
-
-# Membuat dan melatih model LSTM untuk BTC dan ETH
-btc_model = create_lstm_model((X_btc.shape[1], X_btc.shape[2]))
-eth_model = create_lstm_model((X_eth.shape[1], X_eth.shape[2]))
-
-# Latih model
-btc_model.fit(X_btc, y_btc, epochs=30, batch_size=16, verbose=1)
-eth_model.fit(X_eth, y_eth, epochs=30, batch_size=16, verbose=1)
-
-# Simpan model yang telah dilatih
-btc_model.save("btc_model.h5")
-eth_model.save("eth_model.h5")
-
-st.write("Model telah dilatih dan disimpan.")
-
-# Memuat model yang telah dilatih
-btc_model = load_model("btc_model.h5")
-eth_model = load_model("eth_model.h5")
-
-# Prediksi untuk BTC dan ETH
-btc_pred = predict_lstm_trained(btc_data, btc_model, btc_scaler)
-eth_pred = predict_lstm_trained(eth_data, eth_model, eth_scaler)
-
-# Menampilkan hasil prediksi
-st.write(f"Prediksi harga BTC: {btc_pred:.2f}")
-st.write(f"Prediksi harga ETH: {eth_pred:.2f}")
-
-# ========== TAMPILKAN CHART CANDLESTICK ========== #
-def plot_candle_chart(df, symbol):
-    fig = go.Figure(data=[go.Candlestick(x=df.index, open=df["open"], high=df["high"], low=df["low"], close=df["close"], name="Candles"),
-                         go.Scatter(x=df.index, y=df["ema_fast"], name="EMA Fast", line=dict(color="blue")),
-                         go.Scatter(x=df.index, y=df["ema_slow"], name="EMA Slow", line=dict(color="orange")),
-                         go.Scatter(x=df.index, y=df["bb_high"], name="BB High", line=dict(color="green")),
-                         go.Scatter(x=df.index, y=df["bb_low"], name="BB Low", line=dict(color="red"))])
-    fig.update_layout(title=f"Chart {symbol}", xaxis_rangeslider_visible=False)
-    fig.update_xaxes(type='category')
-    st.plotly_chart(fig)
-
-# Visualisasikan chart BTC dan ETH
-st.subheader("📉 Chart BTCUSDT")
-plot_candle_chart(btc_data, "BTCUSDT")
-
-st.subheader("📉 Chart ETHUSDT")
-plot_candle_chart(eth_data, "ETHUSDT")
-
-# ========== DETEKSI SINYAL ========== #
+# ========== SINYAL ========== #
 def detect_signal(df):
-    if df.empty: return "WAIT", None, None, None
     last = df.iloc[-1]
-    long_cond = (
-        last["rsi"] < 70 and
-        last["ema_fast"] > last["ema_slow"] and
-        last["macd"] > 0 and
-        last["close"] > last["bb_low"]
-    )
-    short_cond = (
-        last["rsi"] > 30 and
-        last["ema_fast"] < last["ema_slow"] and
-        last["macd"] < 0 and
-        last["close"] < last["bb_high"]
-    )
-    entry = last["close"]
+    price = last["close"]
+    atr = last["atr"]
+    long_cond = last["rsi"] < 30 and last["close"] < last["bb_low"] and last["ema_fast"] > last["ema_slow"]
+    short_cond = last["rsi"] > 70 and last["close"] > last["bb_high"] and last["ema_fast"] < last["ema_slow"]
+
     if long_cond:
-        return "LONG", entry, entry * 1.02, entry * 0.985
+        return "LONG", price, price + 2*atr, price - 1.5*atr
     elif short_cond:
-        return "SHORT", entry, entry * 0.98, entry * 1.015
+        return "SHORT", price, price - 2*atr, price + 1.5*atr
     else:
         return "WAIT", None, None, None
 
-# ========== ANALISIS SIGNAL ========== #
-def analyze_signal(symbol):
-    df = get_historical_data(symbol, interval="1", limit=500)
+# ========== VISUALISASI ========== #
+def plot_chart(df, symbol, fib_levels=None):
+    fig = go.Figure()
+    fig.add_trace(go.Candlestick(x=df.index, open=df["open"], high=df["high"],
+                                 low=df["low"], close=df["close"], name="Candlesticks"))
+    fig.add_trace(go.Scatter(x=df.index, y=df["ema_fast"], name="EMA Fast", line=dict(color="blue")))
+    fig.add_trace(go.Scatter(x=df.index, y=df["ema_slow"], name="EMA Slow", line=dict(color="orange")))
+    fig.add_trace(go.Scatter(x=df.index, y=df["bb_high"], name="BB High", line=dict(color="green")))
+    fig.add_trace(go.Scatter(x=df.index, y=df["bb_low"], name="BB Low", line=dict(color="red")))
+    fig.add_trace(go.Scatter(x=df.index, y=df["ichimoku_a"], name="Ichimoku A", line=dict(color="purple")))
+    fig.add_trace(go.Scatter(x=df.index, y=df["ichimoku_b"], name="Ichimoku B", line=dict(color="gray")))
+    if fib_levels:
+        for label, level in fib_levels.items():
+            fig.add_hline(y=level, line_dash="dash", annotation_text=label, line_color="teal")
+    fig.update_layout(title=f"{symbol} Technical Chart", xaxis_rangeslider_visible=False)
+    st.plotly_chart(fig)
+
+# ========== ANALISA & TAMPILKAN ========== #
+def analyze(symbol):
+    df = get_historical_data(symbol)
+    if df.empty:
+        st.error(f"Tidak bisa memuat data untuk {symbol}")
+        return
+
     df = add_indicators(df)
+    fib_levels = fibonacci_levels(df)
     signal, entry, tp, sl = detect_signal(df)
-    return signal, entry, tp, sl, df
 
-# Tombol untuk menjalankan analisis
-if st.button("Run Analysis"):
-    signals = []
-    for symbol in ["BTCUSDT", "ETHUSDT"]:
-        signal, entry, tp, sl, df = analyze_signal(symbol)
-        signals.append({
-            "Pair": symbol,
-            "Signal": signal,
-            "Entry": entry,
-            "TP": tp,
-            "SL": sl
-        })
+    st.subheader(f"🔎 Hasil Analisis: {symbol}")
+    st.markdown(f"**Sinyal Deteksi:** `{signal}`")
+    if signal != "WAIT":
+        st.write(f"💰 Entry: `${entry:.2f}`")
+        st.write(f"🎯 TP: `${tp:.2f}`")
+        st.write(f"🛑 SL: `${sl:.2f}`")
 
-    # Tampilkan hasil sinyal dalam tabel
-    if signals:
-        df_summary = pd.DataFrame(signals)
-        st.dataframe(df_summary)
-    else:
-        st.write("No valid signals found.")
+    st.subheader("🧠 Prediksi AI (LSTM)")
+    with st.spinner("Melatih model LSTM..."):
+        model, scaler = train_lstm_model(df)
+        pred_price = predict_future_price(df, model, scaler)
+        st.success(f"📈 Prediksi Harga Selanjutnya: **${pred_price:.2f}**")
+
+    st.subheader("📈 Visualisasi Chart & Fibonacci")
+    plot_chart(df, symbol, fib_levels)
+
+    st.subheader("📏 Fibonacci Levels")
+    st.json(fib_levels)
+
+# ========== UI ========== #
+symbols = ["BTCUSDT", "ETHUSDT"]
+if st.button("🚀 Jalankan Analisis Sekarang"):
+    for sym in symbols:
+        with st.expander(f"📊 Analisa {sym}", expanded=True):
+            analyze(sym)
