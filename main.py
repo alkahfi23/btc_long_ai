@@ -141,8 +141,29 @@ if signal in ["LONG", "SHORT"]:
         st.metric("🛑 Stop Loss", f"${stop_loss:.4f}")
         st.metric("📦 Posisi", f"{position_size} kontrak")
     st.caption(f"(Leverage {leverage}x | Modal ${balance:.2f})")
+    risk_warning = estimate_margin_call_risk(entry_price, stop_loss, leverage)
+    st.warning(risk_warning)
+
 else:
     st.info("⏳ AI menunggu setup ideal di TF kecil *dan* arah tren besar yang sesuai.")
+
+# ==================MARGIN CALL ==================
+def estimate_margin_call_risk(entry, stop_loss, leverage, volatility_pct=3.0):
+    """
+    Estimasi risiko margin call berdasarkan jarak stop loss, leverage, dan volatilitas rata-rata.
+    """
+    if entry == 0 or stop_loss == 0 or leverage == 0:
+        return "❌ Data tidak valid"
+
+    stop_pct = abs(entry - stop_loss) / entry * 100
+    risk_ratio = (volatility_pct / stop_pct) * leverage
+
+    if risk_ratio < 1.0:
+        return "✅ Risiko Margin Call: Rendah"
+    elif risk_ratio < 3.0:
+        return "⚠️ Risiko Margin Call: Sedang"
+    else:
+        return "🚨 Risiko Margin Call: Tinggi"
 
 # ================== GRAFIK & RINGKASAN ==================
 if not df_plot.empty:
