@@ -50,23 +50,25 @@ def detect_signal(df, tolerance_pct=1.0):
     entry = last["close"]
     signal, tp, sl = "WAIT", None, None
 
+    # Signal conditions: LONG or SHORT
     if (
         last["rsi"] < 70 and
         last["ema_fast"] > last["ema_slow"] and
         last["macd"] > 0
     ):
         signal = "LONG"
-        tp = entry * 1.02
-        sl = entry * 0.985
+        tp = entry * 1.02  # TP 2% above entry
+        sl = entry * 0.985  # SL 1.5% below entry
     elif (
         last["rsi"] > 30 and
         last["ema_fast"] < last["ema_slow"] and
         last["macd"] < 0
     ):
         signal = "SHORT"
-        tp = entry * 0.98
-        sl = entry * 1.015
+        tp = entry * 0.98  # TP 2% below entry
+        sl = entry * 1.015  # SL 1.5% above entry
 
+    # Calculate deviation from entry price (if signal is valid)
     latest_price = df["close"].iloc[-1]
     if signal != "WAIT":
         deviation_pct = abs(latest_price - entry) / latest_price * 100
