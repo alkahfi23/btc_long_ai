@@ -4,19 +4,14 @@ import numpy as np
 import requests
 import ta
 import plotly.graph_objects as go
-from keras.models import Sequential
-from keras.layers import LSTM, Dense
+from keras.models import load_model
 from sklearn.preprocessing import MinMaxScaler
+import os
+import io
 
 st.set_page_config(page_title="AI BTC/ETH Signal Analyzer", layout="wide")
-st.markdown("<h1 style='text-align: center; color: #4A90E2;'>🤖 AI Signal Analyzer</h1>", unsafe_allow_html=True)
-st.markdown("<h4 style='text-align: center;'>BTC/ETH Analyzer with AI-Powered Entry & Risk Tools</h4>", unsafe_allow_html=True)
-
-# Sidebar Configuration
-st.sidebar.header("💼 Manajemen Modal")
-modal = st.sidebar.number_input("💰 Modal Anda ($)", value=1000.0, step=100.0)
-risk_pct = st.sidebar.slider("🎯 Risiko per Transaksi (%)", min_value=0.1, max_value=5.0, value=1.0)
-interval = st.sidebar.selectbox("📅 Pilih Interval Kline", options=["1", "5", "15", "30", "60", "120", "240", "D"])
+st.sidebar.title("🔧 Pengaturan Analisa")
+st.sidebar.markdown("Atur parameter analisa dan strategi trading Anda di sini.")
 
 if 'analyzed' not in st.session_state:
     st.session_state.analyzed = False
@@ -61,7 +56,7 @@ def add_indicators(df):
         return pd.DataFrame()
     return df.dropna()
 
-def detect_signal(df, tolerance_pct=1.0):
+def detect_signal(df):
     last = df.iloc[-1]
     signal, tp, sl = "WAIT", None, None
 
@@ -89,26 +84,40 @@ def detect_signal(df, tolerance_pct=1.0):
     entry = last["close"]
     return signal, entry, tp, sl
 
+def backtest_signals(df):
+    results = []
+    for i in range(20, len(df)-10):
+        slice_df = df.iloc[i-20:i+1]
+        signal, entry, tp, sl = detect_signal(slice_df)
+        if signal == "WAIT":
+            continue
+        future_prices = df.iloc[i+1:i+10]["close"]
+        hit_tp = any(p >= tp for p in future_prices) if signal == "LONG" else any(p <= tp for p in future_prices)
+        hit_sl = any(p <= sl for p in future_prices) if signal == "LONG" else any(p >= sl for p in future_prices)
+        outcome = "TP" if hit_tp else "SL" if hit_sl else "NONE"
+        results.append({"index": df.index[i], "signal": signal, "entry": entry, "tp": tp, "sl": sl, "outcome": outcome})
+    return pd.DataFrame(results)
+
+@st.cache_resource
+def load_lstm_model(path="lstm_model.h5"):
+    if os.path.exists(path):
+        return load_model(path)
+    return None
+
 def predict_lstm(df, n_steps=20):
     df = df[["close"]].dropna()
     if len(df) < n_steps + 1:
         return None, None
+    last_close = df["close"].iloc[-1]  # simpan sebelum ubah ke array
     scaler = MinMaxScaler()
     data_scaled = scaler.fit_transform(df.values.reshape(-1, 1))
-    X, y = [], []
-    for i in range(n_steps, len(data_scaled)):
-        X.append(data_scaled[i - n_steps:i])
-        y.append(data_scaled[i])
-    X, y = np.array(X), np.array(y)
-    model = Sequential()
-    model.add(LSTM(50, input_shape=(n_steps, 1)))
-    model.add(Dense(1))
-    model.compile(optimizer="adam", loss="mse")
-    model.fit(X, y, epochs=10, batch_size=16, verbose=0)
+    model = load_lstm_model()
+    if model is None:
+        return None, None
     pred_input = data_scaled[-n_steps:].reshape(1, n_steps, 1)
     pred_scaled = model.predict(pred_input, verbose=0)[0][0]
     pred_price = scaler.inverse_transform([[pred_scaled]])[0][0]
-    direction = "Naik" if pred_price > df["close"].iloc[-1] else "Turun"
+    direction = "Naik" if pred_price > last_close else "Turun"
     return direction, pred_price
 
 def show_chart(df, symbol):
@@ -124,16 +133,10 @@ def show_chart(df, symbol):
 def hitung_risk_management(entry, sl, modal, risk_pct):
     risk_dollar = modal * (risk_pct / 100)
     stop_loss_distance = abs(entry - sl)
-    
     if stop_loss_distance == 0:
         return 0, 0, 0, 0
-
     position_size = risk_dollar / stop_loss_distance
-    target_profit = entry + (entry - sl) * 2 if entry > sl else entry - (sl - entry) * 2
-    reward_distance = abs(target_profit - entry)
-    rr_ratio = reward_distance / stop_loss_distance if stop_loss_distance != 0 else 0
-    
-    return round(position_size, 4), round(risk_dollar, 2), round(stop_loss_distance, 2), round(rr_ratio, 2)
+    return round(position_size, 4), round(risk_dollar, 2), round(stop_loss_distance, 2), round(risk_dollar / stop_loss_distance, 2)
 
 def analyze_symbols(symbols, interval="60"):
     results = []
@@ -145,24 +148,34 @@ def analyze_symbols(symbols, interval="60"):
         df = add_indicators(df)
         signal, entry, tp, sl = detect_signal(df)
         lstm_dir, lstm_price = predict_lstm(df)
+        backtest_df = backtest_signals(df)
         results.append({
             "symbol": symbol, "signal": signal, "entry": entry,
-            "tp": tp, "sl": sl, "lstm": lstm_dir, "df": df
+            "tp": tp, "sl": sl, "lstm": lstm_dir, "df": df, "backtest": backtest_df
         })
     return results
+
+modal = st.sidebar.number_input("💰 Modal Anda ($)", value=1000.0, step=100.0)
+risk_pct = st.sidebar.slider("🎯 Risiko per Transaksi (%)", min_value=0.1, max_value=5.0, value=1.0)
+interval = st.sidebar.selectbox("⏱️ Pilih Interval Waktu", options=["1", "5", "15", "30", "60", "240", "D"], index=4)
+signal_filter = st.sidebar.selectbox("🧳 Filter Sinyal", options=["SEMUA", "LONG", "SHORT", "WAIT"])
 
 if st.sidebar.button("🔍 Jalankan Analisis"):
     st.session_state.analyzed = True
     st.session_state.results = analyze_symbols(["BTCUSDT", "ETHUSDT"], interval=interval)
 
 if st.session_state.analyzed:
-    st.subheader("📊 Hasil Analisa Sinyal Lengkap")
+    st.markdown("<h2 style='color: #4A90E2;'>📊 Hasil Analisa Sinyal</h2>", unsafe_allow_html=True)
     for res in st.session_state.results:
         sym = res["symbol"]
+        if signal_filter != "SEMUA" and res["signal"] != signal_filter:
+            continue
+
         if res["signal"] == "NO DATA":
             st.error(f"{sym}: Gagal mengambil data.")
             continue
-        st.markdown(f"### {sym}")
+
+        st.markdown(f"## {sym}")
         st.write(f"Sinyal: **{res['signal']}**")
         st.write(f"Harga Sekarang: ${res['df']['close'].iloc[-1]:.2f}")
         st.write(f"Entry Price: ${res['entry']:.2f}")
@@ -179,3 +192,33 @@ if st.session_state.analyzed:
             st.write(f"📈 Risk/Reward Ratio: {rr_ratio:.2f}")
 
         show_chart(res["df"], sym)
+
+        if isinstance(res.get("backtest"), pd.DataFrame) and not res["backtest"].empty:
+            st.write("### ⬆️ Backtest Sinyal")
+            outcomes = res["backtest"]["outcome"].value_counts()
+            st.write(outcomes)
+            acc = (outcomes.get("TP", 0) / outcomes.sum()) * 100
+            st.write(f"🎯 Akurasi: **{acc:.2f}%**")
+        else:
+            st.write("🔁 Backtest tidak tersedia atau data tidak cukup.")
+
+    # Tombol unduh hasil analisa ke Excel
+    if st.button("📅 Unduh Hasil ke Excel"):
+        output = io.BytesIO()
+        with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
+            for res in st.session_state.results:
+                symbol = res["symbol"]
+                df = res.get("df")
+                if isinstance(df, pd.DataFrame) and not df.empty:
+                    df.to_excel(writer, sheet_name=f"{symbol}_data")
+                bt_df = res.get("backtest")
+                if isinstance(bt_df, pd.DataFrame) and not bt_df.empty:
+                    bt_df.to_excel(writer, sheet_name=f"{symbol}_backtest")
+
+        output.seek(0)
+        st.download_button(
+            label="📆 Klik untuk mengunduh Excel",
+            data=output,
+            file_name="hasil_analisa_sinyal.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        )
