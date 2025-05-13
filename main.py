@@ -1,22 +1,17 @@
 import streamlit as st
 import pandas as pd
+import numpy as np
 import requests
 import plotly.graph_objects as go
 import ta
-import numpy as np
-from statsmodels.tsa.arima.model import ARIMA
-
-# ==== Tambahan untuk LSTM ====
 from sklearn.preprocessing import MinMaxScaler
 from tensorflow.keras.models import Sequential
-from tensorflow.keras.layers import LSTM, Dense
-from tensorflow.keras.callbacks import EarlyStopping
+from tensorflow.keras.layers import Dense, LSTM
 
-# ============ CONFIG & TITLE ============
 st.set_page_config(page_title="AI BTC Signal Analyzer", layout="wide")
 st.title("📊 AI BTC Signal Analyzer (Multi-Timeframe Strategy)")
 
-# ============ API FUNCTIONS ============
+# ================== API FUNCTIONS ==================
 @st.cache_data(ttl=3600)
 def get_all_symbols():
     url = "https://api.bybit.com/v5/market/instruments-info"
@@ -25,7 +20,7 @@ def get_all_symbols():
         data = res.json()
         return sorted([i["symbol"] for i in data["result"]["list"] if "USDT" in i["symbol"]])
     except:
-        return ["symbol"]
+        return ["BTCUSDT"]
 
 @st.cache_data(ttl=60)
 def get_kline_data(symbol, interval="1", limit=100):
@@ -34,9 +29,7 @@ def get_kline_data(symbol, interval="1", limit=100):
     try:
         r = requests.get(url, params=params, timeout=10)
         data = r.json()
-        df = pd.DataFrame(data["result"]["list"], columns=[
-            "timestamp", "open", "high", "low", "close", "volume", "turnover"
-        ])
+        df = pd.DataFrame(data["result"]["list"], columns=["timestamp", "open", "high", "low", "close", "volume", "turnover"])
         df = df.astype(float)
         df["timestamp"] = pd.to_datetime(df["timestamp"], unit="ms")
         df.set_index("timestamp", inplace=True)
@@ -44,12 +37,13 @@ def get_kline_data(symbol, interval="1", limit=100):
     except:
         return pd.DataFrame()
 
-# ============ INDICATORS & SIGNAL ============
+# ================== INDICATOR & SIGNAL ==================
 def add_indicators(df):
     df["rsi"] = ta.momentum.RSIIndicator(df["close"], window=14).rsi()
     df["ema_fast"] = ta.trend.EMAIndicator(df["close"], window=5).ema_indicator()
     df["ema_slow"] = ta.trend.EMAIndicator(df["close"], window=21).ema_indicator()
     df["macd"] = ta.trend.MACD(df["close"]).macd()
+    df = df.dropna()
     return df
 
 def detect_signal(df):
@@ -88,7 +82,16 @@ def analyze_multi_timeframe(symbol, tf_trend="15", tf_entry="3", limit=100):
     else:
         return "WAIT", None, None, None, df_entry
 
-# ============ VOLATILITY & RISK ============
+# ================== TRAILING STOP ==================
+def calculate_trailing_stop(entry, volatility, direction="LONG", multiplier=2, min_sl_pct=0.5):
+    raw_stop = entry - volatility * multiplier if direction == "LONG" else entry + volatility * multiplier
+    min_stop_range = entry * (min_sl_pct / 100)
+    if direction == "LONG":
+        stop_loss = max(raw_stop, entry - min_stop_range)
+    else:
+        stop_loss = min(raw_stop, entry + min_stop_range)
+    return round(stop_loss, 4)
+
 def estimate_historical_volatility(df, window=14):
     if df.empty or len(df) < window:
         return 0.0
@@ -99,10 +102,8 @@ def estimate_historical_volatility(df, window=14):
 def estimate_margin_call_risk(entry, stop_loss, leverage, historical_volatility):
     if entry == 0 or stop_loss == 0 or leverage == 0:
         return "❌ Data tidak valid"
-
     stop_pct = abs(entry - stop_loss) / entry * 100
     risk_ratio = (historical_volatility / stop_pct) * leverage
-
     if risk_ratio < 1.0:
         return "✅ Risiko Margin Call: Rendah"
     elif risk_ratio < 3.0:
@@ -110,21 +111,12 @@ def estimate_margin_call_risk(entry, stop_loss, leverage, historical_volatility)
     else:
         return "🚨 Risiko Margin Call: Tinggi"
 
-# ============ TRAILING STOP ============
-def calculate_trailing_stop(entry, volatility, direction="LONG", multiplier=2):
-    stop_loss = entry - volatility * multiplier if direction == "LONG" else entry + volatility * multiplier
-    return stop_loss
-
-def check_volatility_for_trade(volatility, threshold=3.0):
-    return volatility <= threshold
-
-# ============ POSITION SIZE ============
 def calculate_position_size(balance, entry, sl, leverage=10, risk_pct=1.0, min_sl_pct=0.5):
     if entry == 0 or sl == 0:
         return 0.0
     stop_range = abs(entry - sl)
     if (stop_range / entry) * 100 < min_sl_pct:
-        st.warning(f"⚠️ Stop Loss terlalu dekat ({(stop_range / entry) * 100:.2f}%). Risiko terlalu tinggi!")
+        st.warning(f"⚠️ Stop Loss terlalu dekat ({(stop_range / entry) * 100:.2f}%)")
         return 0.0
     risk_amount = balance * (risk_pct / 100)
     qty = risk_amount / (stop_range / entry)
@@ -132,108 +124,77 @@ def calculate_position_size(balance, entry, sl, leverage=10, risk_pct=1.0, min_s
     safe_qty = min(qty, max_qty) * 0.9
     return round(safe_qty, 3)
 
-# ============ CHART ============
+# ================== LSTM PREDICTION ==================
+def predict_with_lstm(df, n_steps=20):
+    if len(df) < n_steps + 1:
+        return "Tidak cukup data", 0.0
+
+    data = df["close"].values.reshape(-1, 1)
+    scaler = MinMaxScaler()
+    data_scaled = scaler.fit_transform(data)
+
+    X = []
+    for i in range(n_steps, len(data_scaled)):
+        X.append(data_scaled[i-n_steps:i])
+
+    X = np.array(X)
+    last_input = X[-1].reshape(1, n_steps, 1)
+
+    model = Sequential()
+    model.add(LSTM(50, return_sequences=False, input_shape=(n_steps, 1)))
+    model.add(Dense(1))
+    model.compile(optimizer='adam', loss='mse')
+    model.fit(X, data_scaled[n_steps:], epochs=20, batch_size=8, verbose=0)
+
+    pred_scaled = model.predict(last_input)[0][0]
+    pred_price = scaler.inverse_transform([[pred_scaled]])[0][0]
+
+    return ("Naik" if pred_price > df["close"].iloc[-1] else "Turun"), round(pred_price, 2)
+
+# ================== CHART ==================
 def plot_chart(df):
     fig = go.Figure()
-    fig.add_trace(go.Candlestick(
-        x=df.index,
-        open=df["open"],
-        high=df["high"],
-        low=df["low"],
-        close=df["close"],
-        name="Candlestick"
-    ))
+    fig.add_trace(go.Candlestick(x=df.index, open=df["open"], high=df["high"], low=df["low"], close=df["close"], name="Candlestick"))
     fig.add_trace(go.Scatter(x=df.index, y=df["ema_fast"], name="EMA 5", line=dict(color="blue")))
     fig.add_trace(go.Scatter(x=df.index, y=df["ema_slow"], name="EMA 21", line=dict(color="orange")))
     fig.update_layout(title="📉 Grafik Candlestick + EMA", xaxis_rangeslider_visible=False, height=500)
     return fig
 
-# ============ PREDIKSI LSTM ============
-def prepare_lstm_data(df, lookback=30):
-    scaler = MinMaxScaler()
-    scaled_data = scaler.fit_transform(df[['close']])
-    X, y = [], []
-    for i in range(lookback, len(scaled_data)):
-        X.append(scaled_data[i - lookback:i, 0])
-        y.append(scaled_data[i, 0])
-    X, y = np.array(X), np.array(y)
-    X = np.reshape(X, (X.shape[0], X.shape[1], 1))
-    return X, y, scaler
-
-def train_lstm_model(X, y):
-    model = Sequential([
-        LSTM(32, return_sequences=True, input_shape=(X.shape[1], 1)),
-        LSTM(16),
-        Dense(1)
-    ])
-    model.compile(optimizer='adam', loss='mean_squared_error')
-    es = EarlyStopping(monitor='loss', patience=2, restore_best_weights=True)
-    model.fit(X, y, epochs=5, batch_size=32, verbose=0, callbacks=[es])
-    return model
-
-@st.cache_resource(show_spinner=False)
-def cached_lstm_model(df, lookback=30):
-    X, y, scaler = prepare_lstm_data(df, lookback)
-    model = train_lstm_model(X, y)
-    return model, scaler
-
-def predict_with_lstm(df, lookback=30):
-    if len(df) < lookback + 1:
-        return "Tidak cukup data", 0.0
-    df = df.copy()
-    model, scaler = cached_lstm_model(df, lookback)
-    last_sequence = df[['close']].values[-lookback:]
-    last_scaled = scaler.transform(last_sequence)
-    last_input = np.reshape(last_scaled, (1, lookback, 1))
-    prediction_scaled = model.predict(last_input, verbose=0)
-    predicted_price = scaler.inverse_transform(prediction_scaled)[0][0]
-    direction = "Naik 🚀" if predicted_price > df['close'].iloc[-1] else "Turun 📉"
-    return direction, predicted_price
-
-# ============ UI ============
+# ================== UI ==================
 symbols = get_all_symbols()
 symbol = st.sidebar.selectbox("🔄 Pilih Pair:", symbols, index=symbols.index("BTCUSDT") if "BTCUSDT" in symbols else 0)
 entry_tf = st.sidebar.selectbox("⏱️ Timeframe Entry:", ["1", "3", "5", "15", "30", "60"], index=1)
 balance = st.sidebar.number_input("💰 Modal (USDT):", min_value=10.0, value=100.0)
 leverage = st.sidebar.slider("⚙️ Leverage", 1, 100, 10)
 
-# ============ ANALISA ============
 signal, entry_price, take_profit, stop_loss, df_plot = analyze_multi_timeframe(symbol, tf_trend="15", tf_entry=entry_tf)
 
 st.subheader(f"🤖 Sinyal AI (Multi-Timeframe): **{signal}**")
-if signal in ["LONG", "SHORT"]:
+
+if signal in ["LONG", "SHORT"] and entry_price:
     hist_vol = estimate_historical_volatility(df_plot)
-    trailing_stop = calculate_trailing_stop(entry_price, hist_vol)
-    is_volatility_safe = check_volatility_for_trade(hist_vol)
+    trailing_stop = calculate_trailing_stop(entry_price, hist_vol, direction=signal)
+    position_size = calculate_position_size(balance, entry_price, trailing_stop, leverage)
 
-    if not is_volatility_safe:
-        st.warning("⚠️ Volatilitas pasar terlalu tinggi, berhati-hatilah!")
-    else:
-        position_size = calculate_position_size(balance, entry_price, trailing_stop, leverage)
-        arah = "📈 LONG (Naik)" if signal == "LONG" else "📉 SHORT (Turun)"
-        col1, col2 = st.columns(2)
-        with col1:
-            st.metric("🎯 Entry", f"${entry_price:.4f}")
-            st.metric("✅ Take Profit", f"${take_profit:.4f}")
-        with col2:
-            st.metric("🛑 Trailing Stop Loss", f"${trailing_stop:.4f}")
-            st.metric("📦 Posisi", f"{position_size} kontrak")
-        st.caption(f"(Leverage {leverage}x | Modal ${balance:.2f})")
-        st.caption(f"📈 Estimasi Volatilitas: {hist_vol:.2f}%")
-        risk_warning = estimate_margin_call_risk(entry_price, trailing_stop, leverage, hist_vol)
-        st.warning(risk_warning)
+    col1, col2 = st.columns(2)
+    with col1:
+        st.metric("🎯 Entry", f"${entry_price:.4f}")
+        st.metric("✅ Take Profit", f"${take_profit:.4f}")
+    with col2:
+        st.metric("🛑 Trailing SL", f"${trailing_stop:.4f}")
+        st.metric("📦 Posisi", f"{position_size} kontrak")
+
+    st.caption(f"(Leverage {leverage}x | Modal ${balance:.2f})")
+    st.caption(f"📈 Volatilitas: {hist_vol:.2f}%")
+    st.warning(estimate_margin_call_risk(entry_price, trailing_stop, leverage, hist_vol))
+
 else:
-    st.info("⏳ AI menunggu setup ideal di TF kecil *dan* arah tren besar yang sesuai.")
+    st.info("⏳ AI menunggu setup ideal di TF kecil dan tren besar yang sesuai.")
 
-# ============ GRAFIK ============
+# ================== GRAFIK & LSTM ==================
 if not df_plot.empty:
     st.plotly_chart(plot_chart(df_plot), use_container_width=True)
+    arah_prediksi, harga_prediksi = predict_with_lstm(df_plot)
+    st.markdown(f"### 🔮 Prediksi LSTM: **{arah_prediksi}** ke sekitar **${harga_prediksi:.2f}**")
     st.markdown("### 📌 Ringkasan Indikator")
     st.dataframe(df_plot[["close", "rsi", "ema_fast", "ema_slow", "macd"]].tail(5).round(2))
-
-# ============ LSTM PREDICTION ============
-with st.expander("🔮 Prediksi AI (LSTM)"):
-    with st.spinner("Melatih model LSTM..."):
-        direction, predicted_price = predict_with_lstm(df_plot)
-        st.metric("📌 Arah Prediksi", direction)
-        st.metric("💡 Harga Diprediksi", f"${predicted_price:.2f}")
