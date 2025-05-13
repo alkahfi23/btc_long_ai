@@ -1,4 +1,3 @@
-# ================== LIBRARY ==================
 import streamlit as st
 import pandas as pd
 import requests
@@ -44,18 +43,38 @@ def add_indicators(df):
     df["macd"] = ta.trend.MACD(df["close"]).macd()
     return df
 
-def detect_signal(df):
+def adjust_stop_loss(entry, stop_loss, volatility, min_pct=0.5):
+    """
+    Sesuaikan SL jika terlalu dekat berdasarkan volatilitas dan minimum %.
+    """
+    min_distance = entry * (min_pct / 100)
+    volatility_buffer = entry * (volatility / 100) * 0.5
+    distance = abs(entry - stop_loss)
+
+    if distance < min_distance or distance < volatility_buffer:
+        # SL disesuaikan agar tidak terlalu dekat
+        sl_direction = -1 if stop_loss < entry else 1
+        new_sl = entry + sl_direction * max(min_distance, volatility_buffer)
+        return new_sl
+    return stop_loss
+
+def detect_signal(df, volatility):
     if df.empty:
         return "NO DATA", None, None, None
     last = df.iloc[-1]
     long_cond = (last["rsi"] < 70 and last["ema_fast"] > last["ema_slow"] and last["macd"] > 0)
     short_cond = (last["rsi"] > 30 and last["ema_fast"] < last["ema_slow"] and last["macd"] < 0)
+    
     if long_cond:
         entry = last["close"]
-        return "LONG", entry, entry * 1.02, entry * 0.99
+        sl = entry * 0.99
+        sl = adjust_stop_loss(entry, sl, volatility)
+        return "LONG", entry, entry * 1.02, sl
     elif short_cond:
         entry = last["close"]
-        return "SHORT", entry, entry * 0.98, entry * 1.01
+        sl = entry * 1.01
+        sl = adjust_stop_loss(entry, sl, volatility)
+        return "SHORT", entry, entry * 0.98, sl
     else:
         return "WAIT", None, None, None
 
@@ -72,7 +91,9 @@ def analyze_multi_timeframe(symbol, tf_trend="15", tf_entry="3", limit=100):
     trend_long = trend["ema_fast"] > trend["ema_slow"] and trend["macd"] > 0
     trend_short = trend["ema_fast"] < trend["ema_slow"] and trend["macd"] < 0
 
-    signal, entry, tp, sl = detect_signal(df_entry)
+    volatility = estimate_historical_volatility(df_entry)
+
+    signal, entry, tp, sl = detect_signal(df_entry, volatility)
     if signal == "LONG" and trend_long:
         return "LONG", entry, tp, sl, df_entry
     elif signal == "SHORT" and trend_short:
@@ -80,23 +101,23 @@ def analyze_multi_timeframe(symbol, tf_trend="15", tf_entry="3", limit=100):
     else:
         return "WAIT", None, None, None, df_entry
 
-# ================== RISK, VOLATILITY, POSISI ==================
+# ================== VOLATILITY & MARGIN RISK ==================
 def estimate_historical_volatility(df, window=14):
+    """
+    Estimasi volatilitas berdasarkan standard deviasi return harga.
+    """
     if df.empty or len(df) < window:
         return 0.0
     returns = df["close"].pct_change()
-    volatility = returns.rolling(window=window).std() * 100
+    volatility = returns.rolling(window=window).std() * 100  # Dalam persen
     return volatility.iloc[-1] if not volatility.empty else 0.0
 
-def estimate_margin_call_risk(entry, stop_loss, leverage, historical_volatility, margin_mode="Cross"):
+def estimate_margin_call_risk(entry, stop_loss, leverage, historical_volatility):
     if entry == 0 or stop_loss == 0 or leverage == 0:
         return "❌ Data tidak valid"
 
     stop_pct = abs(entry - stop_loss) / entry * 100
     risk_ratio = (historical_volatility / stop_pct) * leverage
-
-    if margin_mode == "Isolated":
-        risk_ratio *= 0.7
 
     if risk_ratio < 1.0:
         return "✅ Risiko Margin Call: Rendah"
@@ -105,32 +126,24 @@ def estimate_margin_call_risk(entry, stop_loss, leverage, historical_volatility,
     else:
         return "🚨 Risiko Margin Call: Tinggi"
 
+# ================== POSISI AMAN ==================
 def calculate_position_size(balance, entry, sl, leverage=10, risk_pct=1.0, min_sl_pct=0.5):
     if entry == 0 or sl == 0:
         return 0.0
     stop_range = abs(entry - sl)
+
     if (stop_range / entry) * 100 < min_sl_pct:
         st.warning(f"⚠️ Stop Loss terlalu dekat ({(stop_range / entry) * 100:.2f}%). Risiko terlalu tinggi!")
         return 0.0
+
     risk_amount = balance * (risk_pct / 100)
     qty = risk_amount / (stop_range / entry)
     max_qty = (balance * leverage) / entry
     safe_qty = min(qty, max_qty) * 0.9
     return round(safe_qty, 3)
 
-def calculate_liquidation_price(entry, leverage, position_type="LONG", margin_mode="Isolated"):
-    if entry <= 0 or leverage <= 0:
-        return None
-    factor = 1 / leverage
-    if margin_mode == "Cross":
-        factor *= 0.7
-    if position_type == "LONG":
-        return round(entry * (1 - factor), 4)
-    else:
-        return round(entry * (1 + factor), 4)
-
 # ================== CHART ==================
-def plot_chart(df, liquidation_price=None):
+def plot_chart(df):
     fig = go.Figure()
 
     fig.add_trace(go.Candlestick(
@@ -145,16 +158,6 @@ def plot_chart(df, liquidation_price=None):
     fig.add_trace(go.Scatter(x=df.index, y=df["ema_fast"], name="EMA 5", line=dict(color="blue")))
     fig.add_trace(go.Scatter(x=df.index, y=df["ema_slow"], name="EMA 21", line=dict(color="orange")))
 
-    if liquidation_price:
-        fig.add_hline(
-            y=liquidation_price,
-            line_dash="dot",
-            line_color="red",
-            annotation_text="💥 Liquidation Price",
-            annotation_position="top right",
-            opacity=0.8
-        )
-
     fig.update_layout(
         title="📉 Grafik Candlestick + EMA",
         xaxis_rangeslider_visible=False,
@@ -168,7 +171,6 @@ symbol = st.sidebar.selectbox("🔄 Pilih Pair:", symbols, index=symbols.index("
 entry_tf = st.sidebar.selectbox("⏱️ Timeframe Entry:", ["1", "3", "5", "15", "30", "60"], index=1)
 balance = st.sidebar.number_input("💰 Modal (USDT):", min_value=10.0, value=100.0)
 leverage = st.sidebar.slider("⚙️ Leverage", 1, 100, 10)
-margin_mode = st.sidebar.selectbox("⚖️ Mode Margin", ["Cross", "Isolated"])
 
 # ================== ANALISA ==================
 signal, entry_price, take_profit, stop_loss, df_plot = analyze_multi_timeframe(symbol, tf_trend="15", tf_entry=entry_tf)
@@ -176,8 +178,7 @@ signal, entry_price, take_profit, stop_loss, df_plot = analyze_multi_timeframe(s
 st.subheader(f"🤖 Sinyal AI (Multi-Timeframe): **{signal}**")
 if signal in ["LONG", "SHORT"]:
     position_size = calculate_position_size(balance, entry_price, stop_loss, leverage)
-    liq_price = calculate_liquidation_price(entry_price, leverage, signal, margin_mode)
-
+    arah = "📈 LONG (Naik)" if signal == "LONG" else "📉 SHORT (Turun)"
     col1, col2 = st.columns(2)
     with col1:
         st.metric("🎯 Entry", f"${entry_price:.4f}")
@@ -185,20 +186,18 @@ if signal in ["LONG", "SHORT"]:
     with col2:
         st.metric("🛑 Stop Loss", f"${stop_loss:.4f}")
         st.metric("📦 Posisi", f"{position_size} kontrak")
-    
-    st.caption(f"🧷 Mode Margin: **{margin_mode}**")
-    st.caption(f"🧨 Estimasi Harga Likuidasi: **${liq_price:.4f}**")
     st.caption(f"(Leverage {leverage}x | Modal ${balance:.2f})")
 
+    # Estimasi Volatilitas & Margin Risk
     hist_vol = estimate_historical_volatility(df_plot)
     st.caption(f"📈 Estimasi Volatilitas: {hist_vol:.2f}%")
-    risk_warning = estimate_margin_call_risk(entry_price, stop_loss, leverage, hist_vol, margin_mode)
+    risk_warning = estimate_margin_call_risk(entry_price, stop_loss, leverage, hist_vol)
     st.warning(risk_warning)
 else:
     st.info("⏳ AI menunggu setup ideal di TF kecil *dan* arah tren besar yang sesuai.")
 
 # ================== GRAFIK & RINGKASAN ==================
 if not df_plot.empty:
-    st.plotly_chart(plot_chart(df_plot, liquidation_price=liq_price if signal != "WAIT" else None), use_container_width=True)
+    st.plotly_chart(plot_chart(df_plot), use_container_width=True)
     st.markdown("### 📌 Ringkasan Indikator")
     st.dataframe(df_plot[["close", "rsi", "ema_fast", "ema_slow", "macd"]].tail(5).round(2))
