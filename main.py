@@ -98,18 +98,34 @@ leverage = st.sidebar.slider("⚙️ Leverage", 1, 100, 10)
 signal, entry_price, take_profit, stop_loss = analyze_multi_timeframe(symbol, tf_trend="15", tf_entry=entry_tf)
 
 # ================== PLOT ==================
-df_plot = get_kline_data(symbol, entry_tf)
-if not df_plot.empty:
-    df_plot = add_indicators(df_plot)
+def plot_chart(df):
     fig = go.Figure()
+
+    # Candlestick utama
     fig.add_trace(go.Candlestick(
-        x=df_plot.index, open=df_plot["open"], high=df_plot["high"],
-        low=df_plot["low"], close=df_plot["close"], name="Candlestick"
+        x=df.index, open=df["open"], high=df["high"],
+        low=df["low"], close=df["close"], name="Candlestick"
     ))
-    fig.add_trace(go.Scatter(x=df_plot.index, y=df_plot["ema_fast"], name="EMA 5", line=dict(color="blue")))
-    fig.add_trace(go.Scatter(x=df_plot.index, y=df_plot["ema_slow"], name="EMA 21", line=dict(color="orange")))
-    fig.update_layout(title=f"📉 {symbol} - {entry_tf}m", xaxis_rangeslider_visible=False, height=500)
-    st.plotly_chart(fig, use_container_width=True)
+
+    # EMA Fast dan Slow
+    fig.add_trace(go.Scatter(x=df.index, y=df["ema_fast"], name="EMA 5", line=dict(color="blue")))
+    fig.add_trace(go.Scatter(x=df.index, y=df["ema_slow"], name="EMA 21", line=dict(color="orange")))
+
+    # Layout atas
+    fig.update_layout(title="📉 Candlestick + EMA", xaxis_rangeslider_visible=False, height=500)
+
+    # Tambah subplot BOP
+    bop_trace = go.Bar(x=df.index, y=df["bop"], name="Balance of Power", marker_color="purple", opacity=0.5, yaxis="y2")
+
+    # Tambahkan axis kedua untuk BOP
+    fig.update_layout(
+        yaxis=dict(domain=[0.3, 1]),
+        yaxis2=dict(domain=[0, 0.25], title="BOP", showgrid=True),
+        height=600
+    )
+    fig.add_trace(bop_trace)
+
+    return fig
 
 # ================== TAMPILKAN HASIL ==================
 st.subheader(f"🤖 Sinyal AI (Multi-Timeframe): **{signal}**")
