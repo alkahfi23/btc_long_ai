@@ -122,11 +122,18 @@ st.write(f"Prediksi harga ETH: {eth_pred:.2f}")
 def plot_candle_chart(df, symbol):
     fig = go.Figure(data=[go.Candlestick(x=df.index, open=df["open"], high=df["high"], low=df["low"], close=df["close"], name="Candles"),
                          go.Scatter(x=df.index, y=df["ema_fast"], name="EMA Fast", line=dict(color="blue")),
-                         go.Scatter(x=df.index, y=df["ema_slow"], name="EMA Slow", line=dict(color="orange"))])
+                         go.Scatter(x=df.index, y=df["ema_slow"], name="EMA Slow", line=dict(color="orange")),
+                         go.Scatter(x=df.index, y=df["bb_high"], name="BB High", line=dict(color="green")),
+                         go.Scatter(x=df.index, y=df["bb_low"], name="BB Low", line=dict(color="red"))])
     fig.update_layout(title=f"Chart {symbol}", xaxis_rangeslider_visible=False)
-    fig.show()
+    fig.update_xaxes(type='category')
+    st.plotly_chart(fig)
 
+# Visualisasikan chart BTC dan ETH
+st.subheader("📉 Chart BTCUSDT")
 plot_candle_chart(btc_data, "BTCUSDT")
+
+st.subheader("📉 Chart ETHUSDT")
 plot_candle_chart(eth_data, "ETHUSDT")
 
 # ========== DETEKSI SINYAL ========== #
