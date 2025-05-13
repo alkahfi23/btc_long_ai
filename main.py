@@ -13,17 +13,7 @@ from sklearn.preprocessing import MinMaxScaler
 st.set_page_config(page_title="AI BTC Signal Analyzer", layout="wide")
 st.title("🤖 AI BTC Signal Analyzer (Multi-Timeframe Strategy)")
 
-# ========== FUNGSI API ==========
-@st.cache_data(ttl=3600)
-def get_all_symbols():
-    url = "https://api.bybit.com/v5/market/instruments-info"
-    try:
-        res = requests.get(url, params={"category": "linear"}, timeout=10)
-        data = res.json()
-        return sorted([i["symbol"] for i in data["result"]["list"] if "USDT" in i["symbol"]])
-    except:
-        return ["symbol"]
-
+# ========== API ==========
 @st.cache_data(ttl=60)
 def get_kline_data(symbol, interval="1", limit=100):
     url = "https://api.bybit.com/v5/market/kline"
@@ -39,7 +29,7 @@ def get_kline_data(symbol, interval="1", limit=100):
     except:
         return pd.DataFrame()
 
-# ========== INDICATOR ==========
+# ========== INDICATORS ==========
 def add_indicators(df):
     df["rsi"] = ta.momentum.RSIIndicator(df["close"], window=14).rsi()
     df["ema_fast"] = ta.trend.EMAIndicator(df["close"], window=5).ema_indicator()
@@ -51,7 +41,7 @@ def add_indicators(df):
     df["bb_low"] = bb.bollinger_lband()
     return df
 
-# ========== PREDIKSI LSTM ==========
+# ========== LSTM ==========
 def predict_lstm(df, n_steps=20):
     df = df[["close"]].dropna()
     if len(df) < n_steps + 1:
@@ -123,17 +113,14 @@ def analyze_multi_timeframe(symbol, tf_trend="15", tf_entry="3"):
     else:
         return "WAIT", None, None, None, df_entry
 
-# ========== SIDEBAR ==========
-keyword = st.sidebar.text_input("🔍 Filter Pair (misal: BTC, ETH)", "").upper()
-entry_tf = st.sidebar.selectbox("🕒 Timeframe Entry", ["1", "3", "5"], index=1)
-symbols = [s for s in get_all_symbols() if keyword in s]
+# ========== ANALISIS KHUSUS BTCUSDT & ETHUSDT ==========
+symbols = ["BTCUSDT", "ETHUSDT"]
 
-# ========== DAFTAR SINYAL SEMUA PAIR ==========
-st.markdown("## 📊 Daftar Sinyal Valid (LONG / SHORT)")
+st.markdown("## 📊 Sinyal Valid (BTCUSDT & ETHUSDT)")
 summary = []
 
-for sym in symbols[:20]:  # Batasi agar ringan
-    sig, ent, tp, sl, df_sym = analyze_multi_timeframe(sym, tf_trend="15", tf_entry=entry_tf)
+for sym in symbols:
+    sig, ent, tp, sl, df_sym = analyze_multi_timeframe(sym, tf_trend="15", tf_entry="3")
     lstm_dir, _ = predict_lstm(df_sym)
     if sig in ["LONG", "SHORT"] and lstm_dir and ((sig == "LONG" and lstm_dir == "Naik") or (sig == "SHORT" and lstm_dir == "Turun")):
         last = df_sym.iloc[-1]
@@ -157,4 +144,4 @@ if summary:
     df_summary = df_summary.sort_values(by="Kekuatan Sinyal", ascending=False)
     st.dataframe(df_summary.drop(columns=["Kekuatan Sinyal"]))
 else:
-    st.info("Belum ada sinyal valid dari semua pair saat ini.")
+    st.info("Belum ada sinyal valid untuk BTCUSDT dan ETHUSDT saat ini.")
