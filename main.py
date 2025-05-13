@@ -69,6 +69,23 @@ def add_indicators(df):
 if not df.empty:
     df = add_indicators(df)
 
+# === AI Analysis Start ===
+entry_price = float(df['close'].iloc[-1])
+signal = "LONG" if close[-1] > close[-2] else "SHORT"
+
+if signal == "LONG":
+    take_profit = entry_price * 1.01
+    stop_loss = entry_price * 0.99
+else:
+    take_profit = entry_price * 0.99
+    stop_loss = entry_price * 1.01
+
+# Format harga
+entry_price_fmt = f"${entry_price:,.2f}"
+take_profit_fmt = f"${take_profit:,.2f}"
+stop_loss_fmt = f"${stop_loss:,.2f}"
+# === AI Analysis End ===
+
 def detect_signal(df):
     if df.empty:
         return "NO DATA", None, None, None
@@ -133,9 +150,9 @@ if not df.empty:
         arah = "📈 LONG (Naik)" if signal == "LONG" else "📉 SHORT (Turun)"
         st.markdown(f'''
         **🧭 Arah:** {arah}  
-        **🎯 Entry Price:** ${entry_price:.2f}  
-        **🛑 Stop Loss:** ${sl:.2f}  
-        **✅ Take Profit:** ${tp:.2f}  
+        st.markdown(f"🎯 **Entry Price:** {entry_price_fmt} 
+        🛑 *StopLoss* : {stop_loss_fmt}")
+        st.markdown(f"✅ **Take Profit:** {take_profit_fmt}")  
         **📦 Position Size (saran):** {position_size} kontrak BTC  
         (dengan leverage {leverage}x dan risiko 1% dari modal)
         ''')
