@@ -119,15 +119,16 @@ def plot_chart(df):
     fig.update_layout(title="📉 Candlestick + EMA", xaxis_rangeslider_visible=False, height=500)
 
     # Tambah subplot BOP
-    bop_trace = go.Bar(x=df.index, y=df["bop"], name="Balance of Power", marker_color="purple", opacity=0.5, yaxis="y2")
+    if "bop" in df.columns:
+        bop_trace = go.Bar(x=df.index, y=df["bop"], name="Balance of Power", marker_color="purple", opacity=0.5, yaxis="y2")
 
-    # Tambahkan axis kedua untuk BOP
-    fig.update_layout(
-        yaxis=dict(domain=[0.3, 1]),
-        yaxis2=dict(domain=[0, 0.25], title="BOP", showgrid=True),
-        height=600
-    )
-    fig.add_trace(bop_trace)
+        # Tambahkan axis kedua untuk BOP
+        fig.update_layout(
+            yaxis=dict(domain=[0.3, 1]),
+            yaxis2=dict(domain=[0, 0.25], title="BOP", showgrid=True),
+            height=600
+        )
+        fig.add_trace(bop_trace)
 
     return fig
 
@@ -152,3 +153,6 @@ df_plot = get_kline_data(symbol, entry_tf, limit=100)
 df_plot = add_indicators(df_plot)
 st.markdown("### 🔍 Ringkasan Indikator")
 st.dataframe(df_plot[["close", "rsi", "ema_fast", "ema_slow", "macd", "bop"]].tail(5).round(2))
+
+# ================== PLOTTING CHART ==================
+st.plotly_chart(plot_chart(df_plot), use_container_width=True)
