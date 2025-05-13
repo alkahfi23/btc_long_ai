@@ -84,6 +84,9 @@ def analyze_multi_timeframe(symbol, tf_trend="15", tf_entry="3", limit=100):
 
 # ================== VOLATILITY & MARGIN RISK ==================
 def estimate_historical_volatility(df, window=14):
+    """
+    Estimasi volatilitas berdasarkan standard deviasi return harga.
+    """
     if df.empty or len(df) < window:
         return 0.0
     returns = df["close"].pct_change()
@@ -104,9 +107,24 @@ def estimate_margin_call_risk(entry, stop_loss, leverage, historical_volatility)
     else:
         return "🚨 Risiko Margin Call: Tinggi"
 
+# ================== DYNAMIC STOP LOSS & VOLATILITY PROTECTION ==================
+def calculate_trailing_stop(entry, volatility, direction="LONG", multiplier=2):
+    """
+    Fungsi untuk menghitung trailing stop berdasarkan volatilitas pasar.
+    """
+    stop_loss = entry - volatility * multiplier if direction == "LONG" else entry + volatility * multiplier
+    return stop_loss
+
+def check_volatility_for_trade(volatility, threshold=3.0):
+    """
+    Fungsi untuk memeriksa apakah volatilitas pasar terlalu tinggi dan perlu menghentikan perdagangan.
+    """
+    if volatility > threshold:
+        return False
+    return True
+
 # ================== PREDIKSI ARAH PASAR ==================
 def predict_market_direction(df, steps=1):
-    # Menggunakan ARIMA untuk memprediksi harga masa depan
     if df.empty or len(df) < 20:
         return "Tidak cukup data untuk prediksi", 0.0
     
@@ -170,30 +188,34 @@ signal, entry_price, take_profit, stop_loss, df_plot = analyze_multi_timeframe(s
 
 st.subheader(f"🤖 Sinyal AI (Multi-Timeframe): **{signal}**")
 if signal in ["LONG", "SHORT"]:
-    position_size = calculate_position_size(balance, entry_price, stop_loss, leverage)
-    arah = "📈 LONG (Naik)" if signal == "LONG" else "📉 SHORT (Turun)"
-    col1, col2 = st.columns(2)
-    with col1:
-        st.metric("🎯 Entry", f"${entry_price:.4f}")
-        st.metric("✅ Take Profit", f"${take_profit:.4f}")
-    with col2:
-        st.metric("🛑 Stop Loss", f"${stop_loss:.4f}")
-        st.metric("📦 Posisi", f"{position_size} kontrak")
-    st.caption(f"(Leverage {leverage}x | Modal ${balance})")
-
-    # Estimasi Volatilitas & Margin Risk
+    # Estimasi Volatilitas & Trailing Stop Loss
     hist_vol = estimate_historical_volatility(df_plot)
-    st.caption(f"📈 Estimasi Volatilitas: {hist_vol:.2f}%")
-    risk_warning = estimate_margin_call_risk(entry_price, stop_loss, leverage, hist_vol)
-    st.warning(risk_warning)
+    trailing_stop = calculate_trailing_stop(entry_price, hist_vol)
+    is_volatility_safe = check_volatility_for_trade(hist_vol)
+    
+    # Pastikan volatilitas aman untuk perdagangan
+    if not is_volatility_safe:
+        st.warning("⚠️ Volatilitas pasar terlalu tinggi, berhati-hatilah!")
+    else:
+        # Perhitungan Ukuran Posisi
+        position_size = calculate_position_size(balance, entry_price, trailing_stop, leverage)
+        arah = "📈 LONG (Naik)" if signal == "LONG" else "📉 SHORT (Turun)"
+        col1, col2 = st.columns(2)
+        with col1:
+            st.metric("🎯 Entry", f"${entry_price:.4f}")
+            st.metric("✅ Take Profit", f"${take_profit:.4f}")
+        with col2:
+            st.metric("🛑 Trailing Stop Loss", f"${trailing_stop:.4f}")
+            st.metric("📦 Posisi", f"{position_size} kontrak")
+        st.caption(f"(Leverage {leverage}x | Modal ${balance:.2f})")
+
+        # Estimasi Volatilitas & Margin Risk
+        st.caption(f"📈 Estimasi Volatilitas: {hist_vol:.2f}%")
+        risk_warning = estimate_margin_call_risk(entry_price, trailing_stop, leverage, hist_vol)
+        st.warning(risk_warning)
+
 else:
     st.info("⏳ AI menunggu setup ideal di TF kecil *dan* arah tren besar yang sesuai.")
-
-# ================== PREDIKSI ARAH PASAR ==================
-forecast_direction, predicted_price = predict_market_direction(df_plot)
-st.subheader("📉 Prediksi Arah Pasar:")
-st.write(f"Arah pasar diprediksi: **{forecast_direction}**")
-st.write(f"Prediksi harga berikutnya: ${predicted_price:.4f}")
 
 # ================== GRAFIK & RINGKASAN ==================
 if not df_plot.empty:
