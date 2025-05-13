@@ -8,12 +8,13 @@ import ta
 from keras.models import Sequential
 from keras.layers import LSTM, Dense
 from sklearn.preprocessing import MinMaxScaler
+from keras.callbacks import EarlyStopping
 
-# ========== KONFIGURASI ==========
+# ========== KONFIGURASI STREAMLIT ==========
 st.set_page_config(page_title="AI BTC Signal Analyzer", layout="wide")
 st.title("🤖 AI BTC Signal Analyzer (Multi-Timeframe Strategy)")
 
-# ========== FUNGSI API ==========
+# ========== API DATA ==========
 @st.cache_data(ttl=3600)
 def get_all_symbols():
     url = "https://api.bybit.com/v5/market/instruments-info"
@@ -31,6 +32,8 @@ def get_kline_data(symbol, interval="1", limit=100):
     try:
         r = requests.get(url, params=params, timeout=10)
         data = r.json()
+        if "result" not in data or "list" not in data["result"]:
+            return pd.DataFrame()
         df = pd.DataFrame(data["result"]["list"], columns=[
             "timestamp", "open", "high", "low", "close", "volume", "turnover"
         ])
@@ -41,8 +44,10 @@ def get_kline_data(symbol, interval="1", limit=100):
     except:
         return pd.DataFrame()
 
-# ========== INDICATOR ==========
+# ========== INDICATORS ==========
 def add_indicators(df):
+    if df.empty:
+        return df
     df["rsi"] = ta.momentum.RSIIndicator(df["close"], window=14).rsi()
     df["ema_fast"] = ta.trend.EMAIndicator(df["close"], window=5).ema_indicator()
     df["ema_slow"] = ta.trend.EMAIndicator(df["close"], window=21).ema_indicator()
@@ -53,7 +58,7 @@ def add_indicators(df):
     df["bb_low"] = bb.bollinger_lband()
     return df
 
-# ========== PREDIKSI LSTM ==========
+# ========== LSTM PREDIKSI ==========
 def predict_lstm(df, n_steps=20):
     df = df[["close"]].dropna()
     if len(df) < n_steps + 1:
@@ -71,18 +76,19 @@ def predict_lstm(df, n_steps=20):
     model.add(LSTM(50, return_sequences=False, input_shape=(X.shape[1], 1)))
     model.add(Dense(1))
     model.compile(optimizer='adam', loss='mse')
-    model.fit(X, y, epochs=10, batch_size=16, verbose=0)
+    es = EarlyStopping(patience=3, restore_best_weights=True)
+    model.fit(X, y, epochs=10, batch_size=16, verbose=0, callbacks=[es])
 
     input_data = data_scaled[-n_steps:].reshape((1, n_steps, 1))
-    predicted_scaled = model.predict(input_data)[0][0]
+    predicted_scaled = model.predict(input_data, verbose=0)[0][0]
     predicted_price = scaler.inverse_transform([[predicted_scaled]])[0][0]
-
     direction = "Naik" if predicted_price > df["close"].iloc[-1] else "Turun"
     return direction, predicted_price
 
-# ========== SINYAL ==========
+# ========== SIGNAL DETECTION ==========
 def detect_signal(df):
-    if df.empty: return "WAIT", None, None, None
+    if df.empty:
+        return "WAIT", None, None, None
     last = df.iloc[-1]
     long_cond = (
         last["rsi"] < 70 and
@@ -107,7 +113,8 @@ def detect_signal(df):
 def analyze_multi_timeframe(symbol, tf_trend="15", tf_entry="3"):
     df_trend = get_kline_data(symbol, tf_trend)
     df_entry = get_kline_data(symbol, tf_entry)
-    if df_trend.empty or df_entry.empty: return "NO DATA", None, None, None, df_entry
+    if df_trend.empty or df_entry.empty:
+        return "NO DATA", None, None, None, df_entry
 
     df_trend = add_indicators(df_trend)
     df_entry = add_indicators(df_entry)
@@ -123,7 +130,7 @@ def analyze_multi_timeframe(symbol, tf_trend="15", tf_entry="3"):
     else:
         return "WAIT", None, None, None, df_entry
 
-# ========== UKURAN POSISI ==========
+# ========== POSITION SIZE ==========
 def calculate_position_size(balance, entry, sl, leverage=10, risk_pct=1.0, min_sl_pct=0.7):
     if entry == 0 or sl == 0:
         return 0.0
@@ -142,35 +149,43 @@ def calculate_trailing_stop(entry, volatility, direction="LONG", multiplier=1.5)
 
 # ========== VOLATILITY ==========
 def estimate_volatility(df, window=14):
-    if df.empty or len(df) < window: return 0.0
+    if df.empty or len(df) < window:
+        return 0.0
     returns = df["close"].pct_change()
     return (returns.rolling(window=window).std() * 100).iloc[-1]
 
-# ========== CHART ==========
+# ========== PLOT CHART ==========
 def plot_chart(df):
     fig = go.Figure()
-    fig.add_trace(go.Candlestick(x=df.index, open=df["open"], high=df["high"], low=df["low"], close=df["close"], name="Candlestick"))
+    fig.add_trace(go.Candlestick(
+        x=df.index,
+        open=df["open"], high=df["high"],
+        low=df["low"], close=df["close"],
+        name="Candlestick"
+    ))
     fig.add_trace(go.Scatter(x=df.index, y=df["ema_fast"], name="EMA 5", line=dict(color="blue")))
     fig.add_trace(go.Scatter(x=df.index, y=df["ema_slow"], name="EMA 21", line=dict(color="orange")))
     fig.update_layout(title="📉 Grafik Candlestick", height=500)
     return fig
 
-# ========== UI ==========
+# ========== UI STREAMLIT ==========
 symbols = get_all_symbols()
 symbol = st.sidebar.selectbox("🔄 Pilih Pair", symbols, index=symbols.index("BTCUSDT") if "BTCUSDT" in symbols else 0)
 entry_tf = st.sidebar.selectbox("⏱️ Timeframe Entry", ["1", "3", "5", "15", "30", "60"], index=1)
 balance = st.sidebar.number_input("💰 Modal (USDT)", min_value=10.0, value=100.0)
 leverage = st.sidebar.slider("⚙️ Leverage", 1, 100, 10)
 
-# ========== ANALISIS ==========
+# ========== EKSEKUSI ==========
 signal, entry_price, take_profit, stop_loss, df_plot = analyze_multi_timeframe(symbol, tf_trend="15", tf_entry=entry_tf)
 lstm_dir, lstm_pred = predict_lstm(df_plot)
 
 st.subheader(f"📡 Sinyal AI (Multi TF + LSTM): **{signal}** | Prediksi: **{lstm_dir}** (${lstm_pred:.4f})" if lstm_pred else f"📡 Sinyal AI: {signal}")
+
 if signal in ["LONG", "SHORT"]:
     volatility = estimate_volatility(df_plot)
     trailing_sl = calculate_trailing_stop(entry_price, volatility, signal)
     position = calculate_position_size(balance, entry_price, trailing_sl, leverage)
+
     col1, col2 = st.columns(2)
     with col1:
         st.metric("🎯 Entry", f"${entry_price:.4f}")
