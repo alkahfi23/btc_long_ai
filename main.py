@@ -7,8 +7,8 @@ import ta
 st.set_page_config(page_title="AI BTC Signal Analyzer", layout="wide")
 st.title("📊 AI BTC Signal Analyzer (Multi-Timeframe Strategy)")
 
-# ================== API FUNCTIONS ==================
-@st.cache_resource(ttl=3600)
+# ================== API ==================
+@st.cache_data(ttl=3600)
 def get_all_symbols():
     url = "https://api.bybit.com/v5/market/instruments-info"
     try:
@@ -18,7 +18,7 @@ def get_all_symbols():
     except:
         return ["BTCUSDT"]
 
-@st.cache_resource(ttl=60)
+@st.cache_data(ttl=60)
 def get_kline_data(symbol, interval="1", limit=100):
     url = "https://api.bybit.com/v5/market/kline"
     params = {"category": "linear", "symbol": symbol, "interval": interval, "limit": limit}
@@ -41,10 +41,6 @@ def add_indicators(df):
     df["ema_fast"] = ta.trend.EMAIndicator(df["close"], window=5).ema_indicator()
     df["ema_slow"] = ta.trend.EMAIndicator(df["close"], window=21).ema_indicator()
     df["macd"] = ta.trend.MACD(df["close"]).macd()
-
-    # Menambahkan indikator Balance of Power (BOP) secara manual
-    df["bop"] = (df["close"] - df["open"]) / (df["high"] - df["low"])
-
     return df
 
 def detect_signal(df):
@@ -66,73 +62,61 @@ def analyze_multi_timeframe(symbol, tf_trend="15", tf_entry="3", limit=100):
     df_trend = get_kline_data(symbol, tf_trend, limit)
     df_entry = get_kline_data(symbol, tf_entry, limit)
     if df_trend.empty or df_entry.empty:
-        return "NO DATA", None, None, None
+        return "NO DATA", None, None, None, pd.DataFrame()
 
     df_trend = add_indicators(df_trend)
     df_entry = add_indicators(df_entry)
 
-    # Validasi tren
     trend = df_trend.iloc[-1]
     trend_long = trend["ema_fast"] > trend["ema_slow"] and trend["macd"] > 0
     trend_short = trend["ema_fast"] < trend["ema_slow"] and trend["macd"] < 0
 
     signal, entry, tp, sl = detect_signal(df_entry)
     if signal == "LONG" and trend_long:
-        return "LONG", entry, tp, sl
+        return "LONG", entry, tp, sl, df_entry
     elif signal == "SHORT" and trend_short:
-        return "SHORT", entry, tp, sl
+        return "SHORT", entry, tp, sl, df_entry
     else:
-        return "WAIT", None, None, None
+        return "WAIT", None, None, None, df_entry
 
 def calculate_position_size(balance, entry, sl, leverage=10, risk_pct=1.0):
     risk_amount = balance * (risk_pct / 100)
     stop_range = abs(entry - sl)
+
+    # Hindari pembagi nol / SL terlalu dekat
+    if stop_range < 0.001 or stop_range == 0:
+        return 0
+
     qty = risk_amount / (stop_range / entry)
     max_qty = (balance * leverage) / entry
     return round(min(qty, max_qty), 3)
 
-# ================== INPUT SIDEBAR ==================
+# ================== INPUT ==================
 symbols = get_all_symbols()
 symbol = st.sidebar.selectbox("🔄 Pilih Pair:", symbols, index=symbols.index("BTCUSDT") if "BTCUSDT" in symbols else 0)
 entry_tf = st.sidebar.selectbox("⏱️ Timeframe Entry:", ["1", "3", "5", "15", "30", "60"], index=1)
 balance = st.sidebar.number_input("💰 Modal (USDT):", min_value=10.0, value=100.0)
 leverage = st.sidebar.slider("⚙️ Leverage", 1, 100, 10)
 
-# ================== PROSES SINYAL MTA ==================
-signal, entry_price, take_profit, stop_loss = analyze_multi_timeframe(symbol, tf_trend="15", tf_entry=entry_tf)
+# ================== PROSES ==================
+signal, entry_price, take_profit, stop_loss, df_plot = analyze_multi_timeframe(symbol, tf_trend="15", tf_entry=entry_tf)
 
 # ================== PLOT ==================
 def plot_chart(df):
     fig = go.Figure()
 
-    # Candlestick utama
     fig.add_trace(go.Candlestick(
         x=df.index, open=df["open"], high=df["high"],
         low=df["low"], close=df["close"], name="Candlestick"
     ))
 
-    # EMA Fast dan Slow
     fig.add_trace(go.Scatter(x=df.index, y=df["ema_fast"], name="EMA 5", line=dict(color="blue")))
     fig.add_trace(go.Scatter(x=df.index, y=df["ema_slow"], name="EMA 21", line=dict(color="orange")))
 
-    # Layout atas
     fig.update_layout(title="📉 Candlestick + EMA", xaxis_rangeslider_visible=False, height=500)
-
-    # Tambah subplot BOP
-    if "bop" in df.columns:
-        bop_trace = go.Bar(x=df.index, y=df["bop"], name="Balance of Power", marker_color="purple", opacity=0.5, yaxis="y2")
-
-        # Tambahkan axis kedua untuk BOP
-        fig.update_layout(
-            yaxis=dict(domain=[0.3, 1]),
-            yaxis2=dict(domain=[0, 0.25], title="BOP", showgrid=True),
-            height=600
-        )
-        fig.add_trace(bop_trace)
-
     return fig
 
-# ================== TAMPILKAN HASIL ==================
+# ================== HASIL ==================
 st.subheader(f"🤖 Sinyal AI (Multi-Timeframe): **{signal}**")
 if signal in ["LONG", "SHORT"]:
     position_size = calculate_position_size(balance, entry_price, stop_loss, leverage)
@@ -145,14 +129,16 @@ if signal in ["LONG", "SHORT"]:
         st.metric("🛑 Stop Loss", f"${stop_loss:.2f}")
         st.metric("📦 Posisi", f"{position_size} kontrak")
     st.caption(f"(Leverage {leverage}x | Modal ${balance:.2f})")
+
+    if position_size == 0:
+        st.warning("⚠️ Stop Loss terlalu dekat dengan Entry. Perhitungan posisi tidak valid.")
+
+    # Tampilkan chart
+    st.plotly_chart(plot_chart(df_plot), use_container_width=True)
 else:
     st.info("⏳ AI menunggu setup ideal di TF kecil *dan* arah tren besar yang sesuai.")
 
 # ================== RINGKASAN ==================
-df_plot = get_kline_data(symbol, entry_tf, limit=100)
-df_plot = add_indicators(df_plot)
-st.markdown("### 🔍 Ringkasan Indikator")
-st.dataframe(df_plot[["close", "rsi", "ema_fast", "ema_slow", "macd", "bop"]].tail(5).round(2))
-
-# ================== PLOTTING CHART ==================
-st.plotly_chart(plot_chart(df_plot), use_container_width=True)
+if not df_plot.empty:
+    st.markdown("### 🔍 Ringkasan Indikator")
+    st.dataframe(df_plot[["close", "rsi", "ema_fast", "ema_slow", "macd"]].tail(5).round(2))
