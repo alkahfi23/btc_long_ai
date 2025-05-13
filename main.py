@@ -13,7 +13,16 @@ st.set_page_config(page_title="AI BTC/ETH Signal Analyzer", layout="wide")
 st.markdown("<h1 style='text-align: center; color: #4A90E2;'>🤖 AI Signal Analyzer</h1>", unsafe_allow_html=True)
 st.markdown("<h4 style='text-align: center;'>BTC/ETH Analyzer with AI-Powered Entry & Risk Tools</h4>", unsafe_allow_html=True)
 
-# Session state to avoid re-run on each input change
+# Sidebar for input settings
+with st.sidebar:
+    st.header("💼 Pengaturan Analisis")
+    modal = st.number_input("💰 Modal Anda ($)", value=1000.0, step=100.0)
+    risk_pct = st.slider("🎯 Risiko per Transaksi (%)", min_value=0.1, max_value=5.0, value=1.0)
+    interval = st.selectbox("Pilih Interval", options=["1", "5", "15", "30", "60", "240", "1440"])
+    st.markdown("---")
+    st.button("🔍 Jalankan Analisis")
+
+# Session state for storing results
 if 'analyzed' not in st.session_state:
     st.session_state.analyzed = False
 if 'results' not in st.session_state:
@@ -141,28 +150,20 @@ def analyze_symbols(symbols, interval="60"):
         })
     return results
 
-# Streamlit UI
-st.markdown("---")
-st.markdown("### 💼 Manajemen Modal")
-modal = st.number_input("💰 Modal Anda ($)", value=1000.0, step=100.0)
-risk_pct = st.slider("🎯 Risiko per Transaksi (%)", min_value=0.1, max_value=5.0, value=1.0)
-
-interval = st.selectbox("Pilih Interval", options=["1", "5", "15", "30", "60", "240", "1440"])
-
-# Run Analysis
-if st.button("🔍 Jalankan Analisis"):
-    st.session_state.analyzed = True
-    st.session_state.results = analyze_symbols(["BTCUSDT", "ETHUSDT"], interval=interval)
-
-# Display Results
+# Main Page Layout
 if st.session_state.analyzed:
     st.subheader("📊 Hasil Analisa Sinyal Lengkap")
+
+    # Loop over results and display each symbol
     for res in st.session_state.results:
         sym = res["symbol"]
+        st.markdown(f"### {sym}")
+
         if res["signal"] == "NO DATA":
             st.error(f"{sym}: Gagal mengambil data.")
             continue
-        st.markdown(f"### {sym}")
+
+        # Display Signal Information
         st.write(f"Sinyal: **{res['signal']}**")
         st.write(f"Harga Sekarang: ${res['df']['close'].iloc[-1]:.2f}")
         st.write(f"Entry Price: ${res['entry']:.2f}")
