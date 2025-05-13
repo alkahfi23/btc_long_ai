@@ -7,6 +7,7 @@ import numpy as np
 
 st.set_page_config(page_title="AI BTC Signal Analyzer", layout="wide")
 
+# Ambil semua simbol
 @st.cache_data(ttl=3600)
 def get_all_symbols():
     url = "https://api.bybit.com/v5/market/instruments-info"
@@ -22,15 +23,16 @@ def get_all_symbols():
         st.warning(f"⚠️ Gagal mengambil simbol: {e}")
         return ["BTCUSDT"]
 
+# Judul
 st.title("📊 AI BTC Signal Analyzer (LONG & SHORT)")
 
+# Sidebar simbol
 symbols = get_all_symbols()
 symbol = st.sidebar.selectbox("🔄 Pilih Pair Trading:", symbols, index=symbols.index("BTCUSDT") if "BTCUSDT" in symbols else 0)
-interval = "1"
-limit = 100
 
+# Ambil data candle
 @st.cache_data(ttl=60)
-def get_kline_data(symbol, interval, limit):
+def get_kline_data(symbol, interval="1", limit=100):
     url = f"https://api.bybit.com/v5/market/kline"
     params = {
         "category": "linear",
@@ -50,15 +52,15 @@ def get_kline_data(symbol, interval, limit):
             df.set_index("timestamp", inplace=True)
             return df
         else:
-            st.error("❌ Data API Bybit tidak valid atau diblokir. Coba pakai VPN atau periksa parameter.")
-            st.write("Debug response:", data)
+            st.error("❌ Data API Bybit tidak valid.")
             return pd.DataFrame()
     except Exception as e:
-        st.error(f"❌ Gagal mengambil data dari API Bybit: {e}")
+        st.error(f"❌ Gagal ambil data: {e}")
         return pd.DataFrame()
 
-df = get_kline_data(symbol, interval, limit)
+df = get_kline_data(symbol)
 
+# Tambah indikator
 def add_indicators(df):
     df["rsi"] = ta.momentum.RSIIndicator(df["close"], window=14).rsi()
     df["ema_fast"] = ta.trend.EMAIndicator(df["close"], window=5).ema_indicator()
@@ -69,23 +71,7 @@ def add_indicators(df):
 if not df.empty:
     df = add_indicators(df)
 
-# === AI Analysis Start ===
-entry_price = float(df['close'].iloc[-1])
-signal = "LONG" if close[-1] > close[-2] else "SHORT"
-
-if signal == "LONG":
-    take_profit = entry_price * 1.01
-    stop_loss = entry_price * 0.99
-else:
-    take_profit = entry_price * 0.99
-    stop_loss = entry_price * 1.01
-
-# Format harga
-entry_price_fmt = f"${entry_price:,.2f}"
-take_profit_fmt = f"${take_profit:,.2f}"
-stop_loss_fmt = f"${stop_loss:,.2f}"
-# === AI Analysis End ===
-
+# Deteksi sinyal
 def detect_signal(df):
     if df.empty:
         return "NO DATA", None, None, None
@@ -104,19 +90,20 @@ def detect_signal(df):
 
     if long_condition:
         entry = last["close"]
-        stop_loss = entry - (entry * 0.01)
-        take_profit = entry + (entry * 0.02)
-        return "LONG", entry, take_profit, stop_loss
+        sl = entry * 0.99
+        tp = entry * 1.02
+        return "LONG", entry, tp, sl
     elif short_condition:
         entry = last["close"]
-        stop_loss = entry + (entry * 0.01)
-        take_profit = entry - (entry * 0.02)
-        return "SHORT", entry, take_profit, stop_loss
+        sl = entry * 1.01
+        tp = entry * 0.98
+        return "SHORT", entry, tp, sl
     else:
         return "WAIT", None, None, None
 
-signal, entry_price, tp, sl = detect_signal(df)
+signal, entry_price, take_profit, stop_loss = detect_signal(df)
 
+# Hitung posisi
 def calculate_position_size(balance, entry, sl, leverage=10, risk_pct=1.0):
     risk_amount = balance * (risk_pct / 100)
     stop_loss_range = abs(entry - sl)
@@ -124,9 +111,11 @@ def calculate_position_size(balance, entry, sl, leverage=10, risk_pct=1.0):
     max_qty = (balance * leverage) / entry
     return round(min(qty, max_qty), 3)
 
-balance = st.sidebar.number_input("💰 Masukkan modal (USDT):", min_value=10.0, value=100.0)
+# Input user
+balance = st.sidebar.number_input("💰 Modal (USDT):", min_value=10.0, value=100.0)
 leverage = st.sidebar.slider("⚙️ Leverage", 1, 100, 10)
 
+# Chart
 def plot_chart(df):
     fig = go.Figure()
     fig.add_trace(go.Candlestick(
@@ -139,24 +128,25 @@ def plot_chart(df):
     ))
     fig.add_trace(go.Scatter(x=df.index, y=df["ema_fast"], line=dict(color="blue"), name="EMA Fast"))
     fig.add_trace(go.Scatter(x=df.index, y=df["ema_slow"], line=dict(color="orange"), name="EMA Slow"))
-    fig.update_layout(title="📊 BTC/USDT Chart", xaxis_rangeslider_visible=False, height=500)
+    fig.update_layout(title=f"📉 Grafik {symbol}", xaxis_rangeslider_visible=False, height=500)
     return fig
 
 if not df.empty:
     st.plotly_chart(plot_chart(df), use_container_width=True)
-    st.markdown(f"### 📈 Sinyal AI: **{signal}**")
+
+    st.markdown(f"### 🤖 Sinyal AI: **{signal}**")
     if signal in ["LONG", "SHORT"]:
-        position_size = calculate_position_size(balance, entry_price, sl, leverage)
+        position_size = calculate_position_size(balance, entry_price, stop_loss, leverage)
         arah = "📈 LONG (Naik)" if signal == "LONG" else "📉 SHORT (Turun)"
-        st.markdown(f'''
-        **🧭 Arah:** {arah}  
-        st.markdown(f"🎯 **Entry Price:** {entry_price_fmt} 
-        🛑 *StopLoss* : {stop_loss_fmt}")
-        st.markdown(f"✅ **Take Profit:** {take_profit_fmt}")  
-        **📦 Position Size (saran):** {position_size} kontrak BTC  
-        (dengan leverage {leverage}x dan risiko 1% dari modal)
-        ''')
+        st.markdown(f"""
+**🧭 Arah:** {arah}  
+🎯 **Entry Price:** `${entry_price:.2f}`  
+🛑 *StopLoss:* `${stop_loss:.2f}`  
+✅ **Take Profit:** `${take_profit:.2f}`  
+📦 **Position Size (saran):** `{position_size}` kontrak {symbol}  
+*(leverage {leverage}x, risiko 1% dari modal)*
+        """)
     else:
-        st.warning("📡 Belum ada sinyal masuk posisi. AI masih menunggu kondisi ideal.")
+        st.info("⏳ Belum ada sinyal. AI menunggu setup ideal.")
 else:
-    st.error("⚠️ Data tidak tersedia atau gagal diambil.")
+    st.error("❌ Data tidak tersedia.")
