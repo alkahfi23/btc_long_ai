@@ -8,10 +8,13 @@ import ta
 from keras.models import Sequential
 from keras.layers import LSTM, Dense
 from sklearn.preprocessing import MinMaxScaler
+import datetime
 
 # ========== KONFIGURASI ==========
 st.set_page_config(page_title="AI BTC Signal Analyzer", layout="wide")
-st.title("🤖 AI BTC Signal Analyzer (Optimized for BTCUSDT & ETHUSDT)")
+st.title("🤖 AI BTC Signal Analyzer (Multi-Timeframe Strategy)")
+st.markdown("Klik tombol di bawah untuk menjalankan analisa.")
+run_button = st.button("🚀 RUN ANALISA")
 
 # ========== API ==========
 @st.cache_data(ttl=60)
@@ -26,7 +29,8 @@ def get_kline_data(symbol, interval="1", limit=100):
         df["timestamp"] = pd.to_datetime(df["timestamp"], unit="ms")
         df.set_index("timestamp", inplace=True)
         return df
-    except:
+    except Exception as e:
+        st.error(f"Gagal mengambil data {symbol}: {e}")
         return pd.DataFrame()
 
 # ========== INDICATORS ==========
@@ -41,9 +45,8 @@ def add_indicators(df):
     df["bb_low"] = bb.bollinger_lband()
     return df
 
-# ========== LSTM Prediction ==========
-@st.cache_resource(show_spinner=False)
-def train_lstm_model(df, n_steps=20):
+# ========== LSTM ==========
+def predict_lstm(df, n_steps=20):
     df = df[["close"]].dropna()
     if len(df) < n_steps + 1:
         return None, None
@@ -61,20 +64,15 @@ def train_lstm_model(df, n_steps=20):
     model.add(Dense(1))
     model.compile(optimizer='adam', loss='mse')
     model.fit(X, y, epochs=10, batch_size=16, verbose=0)
-    return model, scaler
 
-def predict_lstm_price(df, model, scaler, n_steps=20):
-    df = df[["close"]].dropna()
-    if len(df) < n_steps + 1:
-        return "WAIT", None
-    data_scaled = scaler.transform(df)
     input_data = data_scaled[-n_steps:].reshape((1, n_steps, 1))
-    predicted_scaled = model.predict(input_data)[0][0]
+    predicted_scaled = model.predict(input_data, verbose=0)[0][0]
     predicted_price = scaler.inverse_transform([[predicted_scaled]])[0][0]
+
     direction = "Naik" if predicted_price > df["close"].iloc[-1] else "Turun"
     return direction, predicted_price
 
-# ========== SIGNAL ==========
+# ========== SINYAL ==========
 def detect_signal(df):
     if df.empty: return "WAIT", None, None, None
     last = df.iloc[-1]
@@ -98,67 +96,88 @@ def detect_signal(df):
     else:
         return "WAIT", None, None, None
 
-# ========== ANALYSIS MULTI-TIMEFRAME ==========
 def analyze_multi_timeframe(symbol, tf_trend="15", tf_entry="3"):
     df_trend = get_kline_data(symbol, tf_trend)
     df_entry = get_kline_data(symbol, tf_entry)
     if df_trend.empty or df_entry.empty:
-        return "NO DATA", None, None, None, df_entry, "-"
+        return "NO DATA", None, None, None, df_entry, "❌ Data tidak tersedia"
 
     df_trend = add_indicators(df_trend)
     df_entry = add_indicators(df_entry)
-
     trend = df_trend.iloc[-1]
     trend_long = trend["ema_fast"] > trend["ema_slow"] and trend["macd"] > 0
     trend_short = trend["ema_fast"] < trend["ema_slow"] and trend["macd"] < 0
 
     signal, entry, tp, sl = detect_signal(df_entry)
-    model, scaler = train_lstm_model(df_entry)
-    lstm_dir, _ = predict_lstm_price(df_entry, model, scaler)
+    lstm_dir, _ = predict_lstm(df_entry)
 
-    if signal in ["LONG", "SHORT"] and entry and sl and tp:
+    if signal == "LONG" and trend_long and lstm_dir == "Naik":
+        pass
+    elif signal == "SHORT" and trend_short and lstm_dir == "Turun":
+        pass
+    else:
+        return "WAIT", None, None, None, df_entry, "Belum terkonfirmasi"
+
+    # Risk check
+    if entry and sl and tp:
         risk = abs(entry - sl)
         reward = abs(tp - entry)
         risk_reward = reward / risk if risk != 0 else 0
         sl_pct = abs(entry - sl) / entry * 100
 
         if risk_reward < 1 or sl_pct < 0.5:
-            return "WAIT", None, None, None, df_entry, "⚠️ R:R buruk atau SL terlalu dekat"
+            return "WAIT", None, None, None, df_entry, "⚠️ Risiko tinggi (SL terlalu dekat atau R:R < 1)"
 
-    if signal == "LONG" and trend_long and lstm_dir == "Naik":
-        return signal, entry, tp, sl, df_entry, "✅ Confirmed"
-    elif signal == "SHORT" and trend_short and lstm_dir == "Turun":
-        return signal, entry, tp, sl, df_entry, "✅ Confirmed"
-    else:
-        return "WAIT", None, None, None, df_entry, "Not Confirmed"
+    return signal, entry, tp, sl, df_entry, "✅ Valid"
 
-# ========== TAMPILKAN ==========
-symbols = ["BTCUSDT", "ETHUSDT"]
-st.markdown("## 📊 Sinyal Valid (BTCUSDT & ETHUSDT)")
-summary = []
+# ========== ANALISIS DAN VISUALISASI ==========
+if run_button:
+    symbols = ["BTCUSDT", "ETHUSDT"]
+    st.markdown("## 📊 Sinyal Valid (BTCUSDT & ETHUSDT)")
+    summary = []
 
-for sym in symbols:
-    sig, ent, tp, sl, df_sym, note = analyze_multi_timeframe(sym)
-    if sig in ["LONG", "SHORT"]:
-        last = df_sym.iloc[-1]
-        strength = abs(last["ema_fast"] - last["ema_slow"]) + abs(last["macd"]) + abs(last["rsi"] - 50)
-        summary.append({
-            "Pair": sym,
-            "Sinyal": sig,
-            "Entry": f"${ent:.2f}" if ent else "-",
-            "TP": f"${tp:.2f}" if tp else "-",
-            "SL": f"${sl:.2f}" if sl else "-",
-            "RSI": round(last["rsi"], 2),
-            "MACD": round(last["macd"], 4),
-            "EMA Fast": round(last["ema_fast"], 2),
-            "EMA Slow": round(last["ema_slow"], 2),
-            "Catatan Risiko": note,
-            "Kekuatan Sinyal": strength
-        })
+    for sym in symbols:
+        sig, ent, tp, sl, df_sym, note = analyze_multi_timeframe(sym, tf_trend="15", tf_entry="3")
+        if sig in ["LONG", "SHORT"] and not df_sym.empty:
+            last = df_sym.iloc[-1]
+            signal_time = last.name
+            valid_until = signal_time + pd.Timedelta(minutes=15)
 
-if summary:
-    df_summary = pd.DataFrame(summary)
-    df_summary = df_summary.sort_values(by="Kekuatan Sinyal", ascending=False)
-    st.dataframe(df_summary.drop(columns=["Kekuatan Sinyal"]))
-else:
-    st.info("Belum ada sinyal valid untuk BTCUSDT dan ETHUSDT saat ini.")
+            strength = abs(last["ema_fast"] - last["ema_slow"]) + abs(last["macd"]) + abs(last["rsi"] - 50)
+            summary.append({
+                "Pair": sym,
+                "Sinyal": sig,
+                "Entry": f"${ent:.2f}" if ent else "-",
+                "TP": f"${tp:.2f}" if tp else "-",
+                "SL": f"${sl:.2f}" if sl else "-",
+                "RSI": round(last["rsi"], 2),
+                "MACD": round(last["macd"], 4),
+                "EMA Fast": round(last["ema_fast"], 2),
+                "EMA Slow": round(last["ema_slow"], 2),
+                "Sinyal Valid Sampai": valid_until.strftime("%Y-%m-%d %H:%M:%S"),
+                "Catatan Risiko": note,
+                "Kekuatan Sinyal": strength,
+                "Chart Data": df_sym
+            })
+
+    if summary:
+        df_summary = pd.DataFrame(summary)
+        df_display = df_summary.drop(columns=["Kekuatan Sinyal", "Chart Data"])
+        df_display = df_display.sort_values(by="Kekuatan Sinyal", ascending=False)
+        st.dataframe(df_display)
+
+        # ========== CHART ==========
+        for row in summary:
+            st.markdown(f"### 📈 {row['Pair']} ({row['Sinyal']})")
+            df_candle = row["Chart Data"].copy()
+            fig = go.Figure(data=[
+                go.Candlestick(
+                    x=df_candle.index,
+                    open=df_candle["open"],
+                    high=df_candle["high"],
+                    low=df_candle["low"],
+                    close=df_candle["close"],
+                    name="Candles"
+                ),
+                go.Scatter(x=df_candle.index, y=df_candle["ema_fast"], line=dict(color='blue', width=1), name="EMA Fast"),
+                go.Scatter(x=df_candle.index, y=df_candle["ema_slow"], line=dict(color='
