@@ -11,7 +11,13 @@ import io
 
 st.set_page_config(page_title="AI BTC/ETH Signal Analyzer", layout="wide")
 st.sidebar.title("🔧 Pengaturan Analisa")
-st.sidebar.markdown("Atur parameter analisa dan strategi trading Anda di sini.")
+
+# Sidebar inputs
+modal = st.sidebar.number_input("💰 Modal Anda ($)", value=1000.0, step=100.0)
+risk_pct = st.sidebar.slider("🎯 Risiko per Transaksi (%)", min_value=0.1, max_value=5.0, value=1.0)
+interval = st.sidebar.selectbox("⏱️ Pilih Interval Waktu", options=["1", "5", "15", "30", "60", "240", "D"], index=4)
+signal_filter = st.sidebar.selectbox("🧳 Filter Sinyal", options=["SEMUA", "LONG", "SHORT", "WAIT"])
+leverage = st.sidebar.number_input("⚙️ Leverage", min_value=1, max_value=125, value=10)
 
 if 'analyzed' not in st.session_state:
     st.session_state.analyzed = False
@@ -27,7 +33,6 @@ def get_kline_data(symbol, interval="60", limit=200):
         data = res.json()
         df = pd.DataFrame(data["result"]["list"])
         df.columns = ["timestamp", "open", "high", "low", "close", "volume", "turnover"]
-
         numeric_cols = ["open", "high", "low", "close", "volume", "turnover"]
         df[numeric_cols] = df[numeric_cols].astype(float)
         df["timestamp"] = pd.to_datetime(df["timestamp"].astype(int), unit="ms")
@@ -108,7 +113,7 @@ def predict_lstm(df, n_steps=20):
     df = df[["close"]].dropna()
     if len(df) < n_steps + 1:
         return None, None
-    last_close = df["close"].iloc[-1]  # simpan sebelum ubah ke array
+    last_close = df["close"].iloc[-1]
     scaler = MinMaxScaler()
     data_scaled = scaler.fit_transform(df.values.reshape(-1, 1))
     model = load_lstm_model()
@@ -120,16 +125,6 @@ def predict_lstm(df, n_steps=20):
     direction = "Naik" if pred_price > last_close else "Turun"
     return direction, pred_price
 
-def show_chart(df, symbol):
-    fig = go.Figure(data=[go.Candlestick(
-        x=df.index,
-        open=df['open'], high=df['high'],
-        low=df['low'], close=df['close'],
-        name='Candles'
-    )])
-    fig.update_layout(title=f'Chart {symbol}', xaxis_rangeslider_visible=False)
-    st.plotly_chart(fig, use_container_width=True)
-
 def hitung_risk_management(entry, sl, modal, risk_pct):
     risk_dollar = modal * (risk_pct / 100)
     stop_loss_distance = abs(entry - sl)
@@ -137,6 +132,33 @@ def hitung_risk_management(entry, sl, modal, risk_pct):
         return 0, 0, 0, 0
     position_size = risk_dollar / stop_loss_distance
     return round(position_size, 4), round(risk_dollar, 2), round(stop_loss_distance, 2), round(risk_dollar / stop_loss_distance, 2)
+
+def calculate_margin(entry_price, position_size, leverage):
+    if leverage == 0:
+        return 0
+    return round((entry_price * position_size) / leverage, 2)
+
+def show_chart(df, symbol):
+    fig = go.Figure(data=[go.Candlestick(
+        x=df.index,
+        open=df['open'], high=df['high'],
+        low=df['low'], close=df['close'],
+        name='Candlestick'
+    )])
+    if 'signal' in df.columns:
+        for i in df.index:
+            sig = df.loc[i, 'signal']
+            price = df.loc[i, 'close']
+            if sig == "LONG":
+                fig.add_trace(go.Scatter(x=[i], y=[price], mode='markers',
+                                         marker=dict(color='green', size=10, symbol='triangle-up'),
+                                         name='LONG'))
+            elif sig == "SHORT":
+                fig.add_trace(go.Scatter(x=[i], y=[price], mode='markers',
+                                         marker=dict(color='red', size=10, symbol='triangle-down'),
+                                         name='SHORT'))
+    fig.update_layout(title=f"{symbol} - Chart & Signals", xaxis_rangeslider_visible=False)
+    st.plotly_chart(fig, use_container_width=True)
 
 def analyze_symbols(symbols, interval="60"):
     results = []
@@ -147,54 +169,63 @@ def analyze_symbols(symbols, interval="60"):
             continue
         df = add_indicators(df)
         signal, entry, tp, sl = detect_signal(df)
+        df['signal'] = "WAIT"
+        df.loc[df.index[-1], 'signal'] = signal
+        
         lstm_dir, lstm_price = predict_lstm(df)
         backtest_df = backtest_signals(df)
         results.append({
-            "symbol": symbol, "signal": signal, "entry": entry,
-            "tp": tp, "sl": sl, "lstm": lstm_dir, "df": df, "backtest": backtest_df
+            "symbol": symbol,
+            "signal": signal,
+            "entry": entry,
+            "tp": tp,
+            "sl": sl,
+            "lstm": lstm_dir,
+            "df": df,
+            "backtest": backtest_df
         })
     return results
 
-modal = st.sidebar.number_input("💰 Modal Anda ($)", value=1000.0, step=100.0)
-risk_pct = st.sidebar.slider("🎯 Risiko per Transaksi (%)", min_value=0.1, max_value=5.0, value=1.0)
-interval = st.sidebar.selectbox("⏱️ Pilih Interval Waktu", options=["1", "5", "15", "30", "60", "240", "D"], index=4)
-signal_filter = st.sidebar.selectbox("🧳 Filter Sinyal", options=["SEMUA", "LONG", "SHORT", "WAIT"])
-
+# Tombol Analisa
 if st.sidebar.button("🔍 Jalankan Analisis"):
     st.session_state.analyzed = True
     st.session_state.results = analyze_symbols(["BTCUSDT", "ETHUSDT"], interval=interval)
 
+# Tampilan Hasil
 if st.session_state.analyzed:
     st.markdown("<h2 style='color: #4A90E2;'>📊 Hasil Analisa Sinyal</h2>", unsafe_allow_html=True)
     for res in st.session_state.results:
-        sym = res["symbol"]
+        symbol = res["symbol"]
         if signal_filter != "SEMUA" and res["signal"] != signal_filter:
             continue
 
         if res["signal"] == "NO DATA":
-            st.error(f"{sym}: Gagal mengambil data.")
+            st.error(f"{symbol}: Gagal mengambil data.")
             continue
 
-        st.markdown(f"## {sym}")
+        st.subheader(symbol)
+        current_price = res['df']['close'].iloc[-1]
+        st.write(f"Harga Sekarang: **${current_price:.2f}**")
         st.write(f"Sinyal: **{res['signal']}**")
-        st.write(f"Harga Sekarang: ${res['df']['close'].iloc[-1]:.2f}")
-        st.write(f"Entry Price: ${res['entry']:.2f}")
-        st.write(f"TP: ${res['tp']:.2f}" if res['tp'] else "-")
-        st.write(f"SL: ${res['sl']:.2f}" if res['sl'] else "-")
+        st.write(f"Entry Price: **${res['entry']:.2f}**")
+        st.write(f"TP: **${res['tp']:.2f}**" if res['tp'] else "-")
+        st.write(f"SL: **${res['sl']:.2f}**" if res['sl'] else "-")
         st.write(f"Prediksi AI (LSTM): **{res['lstm']}**")
 
         if res['signal'] != "WAIT" and res['tp'] and res['sl']:
             pos_size, loss_amt, sl_dist, rr_ratio = hitung_risk_management(
                 res['entry'], res['sl'], modal, risk_pct
             )
-            st.write(f"📌 Ukuran Posisi: **{pos_size} USDT**")
-            st.write(f"📉 Risiko: ${loss_amt} | Jarak SL: ${sl_dist}")
-            st.write(f"📈 Risk/Reward Ratio: {rr_ratio:.2f}")
+            margin = calculate_margin(res['entry'], pos_size, leverage)
 
-        show_chart(res["df"], sym)
+            st.write(f"📌 Ukuran Posisi: **{pos_size} USDT**")
+            st.write(f"📉 Risiko: ${loss_amt} | SL: ${sl_dist} | R/R Ratio: {rr_ratio:.2f}")
+            st.write(f"💼 Estimasi Margin Dibutuhkan: **${margin}** dengan Leverage **{leverage}x**")
+
+        show_chart(res["df"], symbol)
 
         if isinstance(res.get("backtest"), pd.DataFrame) and not res["backtest"].empty:
-            st.write("### ⬆️ Backtest Sinyal")
+            st.write("### ⬅️ Backtest Sinyal")
             outcomes = res["backtest"]["outcome"].value_counts()
             st.write(outcomes)
             acc = (outcomes.get("TP", 0) / outcomes.sum()) * 100
@@ -202,7 +233,7 @@ if st.session_state.analyzed:
         else:
             st.write("🔁 Backtest tidak tersedia atau data tidak cukup.")
 
-    # Tombol unduh hasil analisa ke Excel
+    # Tombol Unduh Excel
     if st.button("📅 Unduh Hasil ke Excel"):
         output = io.BytesIO()
         with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
@@ -217,7 +248,7 @@ if st.session_state.analyzed:
 
         output.seek(0)
         st.download_button(
-            label="📆 Klik untuk mengunduh Excel",
+            label="📥 Klik untuk Mengunduh Excel",
             data=output,
             file_name="hasil_analisa_sinyal.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
