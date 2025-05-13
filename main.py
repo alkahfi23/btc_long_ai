@@ -12,6 +12,12 @@ st.set_page_config(page_title="AI BTC/ETH Signal Analyzer", layout="wide")
 st.markdown("<h1 style='text-align: center; color: #4A90E2;'>🤖 AI Signal Analyzer</h1>", unsafe_allow_html=True)
 st.markdown("<h4 style='text-align: center;'>BTC/ETH Analyzer with AI-Powered Entry & Risk Tools</h4>", unsafe_allow_html=True)
 
+# Sidebar Configuration
+st.sidebar.header("💼 Manajemen Modal")
+modal = st.sidebar.number_input("💰 Modal Anda ($)", value=1000.0, step=100.0)
+risk_pct = st.sidebar.slider("🎯 Risiko per Transaksi (%)", min_value=0.1, max_value=5.0, value=1.0)
+interval = st.sidebar.selectbox("📅 Pilih Interval Kline", options=["1", "5", "15", "30", "60", "120", "240", "D"])
+
 if 'analyzed' not in st.session_state:
     st.session_state.analyzed = False
 if 'results' not in st.session_state:
@@ -116,20 +122,13 @@ def show_chart(df, symbol):
     st.plotly_chart(fig, use_container_width=True)
 
 def hitung_risk_management(entry, sl, modal, risk_pct):
-    # Risiko dolar yang akan dipertaruhkan
     risk_dollar = modal * (risk_pct / 100)
-
-    # Jarak dari entry ke stop loss
     stop_loss_distance = abs(entry - sl)
     
-    # Menghindari pembagian dengan nol jika entry sama dengan SL
     if stop_loss_distance == 0:
         return 0, 0, 0, 0
 
-    # Ukuran posisi dihitung berdasarkan risiko dolar yang dapat diterima dibagi dengan jarak SL
     position_size = risk_dollar / stop_loss_distance
-    
-    # Menghitung Risk/Reward Ratio (RRR)
     target_profit = entry + (entry - sl) * 2 if entry > sl else entry - (sl - entry) * 2
     reward_distance = abs(target_profit - entry)
     rr_ratio = reward_distance / stop_loss_distance if stop_loss_distance != 0 else 0
@@ -152,14 +151,9 @@ def analyze_symbols(symbols, interval="60"):
         })
     return results
 
-st.markdown("---")
-st.markdown("### 💼 Manajemen Modal")
-modal = st.number_input("💰 Modal Anda ($)", value=1000.0, step=100.0)
-risk_pct = st.slider("🎯 Risiko per Transaksi (%)", min_value=0.1, max_value=5.0, value=1.0)
-
-if st.button("🔍 Jalankan Analisis"):
+if st.sidebar.button("🔍 Jalankan Analisis"):
     st.session_state.analyzed = True
-    st.session_state.results = analyze_symbols(["BTCUSDT", "ETHUSDT"], interval="60")
+    st.session_state.results = analyze_symbols(["BTCUSDT", "ETHUSDT"], interval=interval)
 
 if st.session_state.analyzed:
     st.subheader("📊 Hasil Analisa Sinyal Lengkap")
