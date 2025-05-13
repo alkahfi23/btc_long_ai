@@ -8,7 +8,7 @@ st.set_page_config(page_title="AI BTC Signal Analyzer", layout="wide")
 st.title("📊 AI BTC Signal Analyzer (Multi-Timeframe Strategy)")
 
 # ================== API FUNCTIONS ==================
-@st.cache_data(ttl=3600)
+@st.cache_resource(ttl=3600)
 def get_all_symbols():
     url = "https://api.bybit.com/v5/market/instruments-info"
     try:
@@ -18,7 +18,7 @@ def get_all_symbols():
     except:
         return ["BTCUSDT"]
 
-@st.cache_data(ttl=60)
+@st.cache_resource(ttl=60)
 def get_kline_data(symbol, interval="1", limit=100):
     url = "https://api.bybit.com/v5/market/kline"
     params = {"category": "linear", "symbol": symbol, "interval": interval, "limit": limit}
@@ -41,6 +41,10 @@ def add_indicators(df):
     df["ema_fast"] = ta.trend.EMAIndicator(df["close"], window=5).ema_indicator()
     df["ema_slow"] = ta.trend.EMAIndicator(df["close"], window=21).ema_indicator()
     df["macd"] = ta.trend.MACD(df["close"]).macd()
+
+    # Menambahkan indikator Balance of Power (BOP)
+    df["bop"] = ta.volume.BalanceOfPowerIndicator(df["close"], df["volume"]).balance_of_power()
+    
     return df
 
 def detect_signal(df):
@@ -144,5 +148,7 @@ else:
     st.info("⏳ AI menunggu setup ideal di TF kecil *dan* arah tren besar yang sesuai.")
 
 # ================== RINGKASAN ==================
+df_plot = get_kline_data(symbol, entry_tf, limit=100)
+df_plot = add_indicators(df_plot)
 st.markdown("### 🔍 Ringkasan Indikator")
-st.dataframe(df_plot[["close", "rsi", "ema_fast", "ema_slow", "macd"]].tail(5).round(2))
+st.dataframe(df_plot[["close", "rsi", "ema_fast", "ema_slow", "macd", "bop"]].tail(5).round(2))
