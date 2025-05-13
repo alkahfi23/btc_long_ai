@@ -42,9 +42,9 @@ def add_indicators(df):
     df["ema_slow"] = ta.trend.EMAIndicator(df["close"], window=21).ema_indicator()
     df["macd"] = ta.trend.MACD(df["close"]).macd()
 
-    # Menambahkan indikator Balance of Power (BOP)
-    df["bop"] = ta.volume.BalanceOfPowerIndicator(df["close"], df["volume"]).balance_of_power()
-    
+    # Menambahkan indikator Balance of Power (BOP) secara manual
+    df["bop"] = (df["close"] - df["open"]) / (df["high"] - df["low"])
+
     return df
 
 def detect_signal(df):
