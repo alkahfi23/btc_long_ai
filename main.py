@@ -31,6 +31,7 @@ def get_kline_data(symbol, interval="60", limit=200):
         df[numeric_cols] = df[numeric_cols].astype(float)
         df["timestamp"] = pd.to_datetime(df["timestamp"].astype(int), unit="ms")
         df.set_index("timestamp", inplace=True)
+        df.sort_index(inplace=True)
         return df
     except Exception as e:
         st.error(f"Error fetching {symbol}: {e}")
@@ -56,7 +57,6 @@ def add_indicators(df):
 
 def detect_signal(df, tolerance_pct=1.0):
     last = df.iloc[-1]
-    entry = last["close"]
     signal, tp, sl = "WAIT", None, None
 
     if (
@@ -67,8 +67,8 @@ def detect_signal(df, tolerance_pct=1.0):
         last["stoch_k"] > last["stoch_d"]
     ):
         signal = "LONG"
-        tp = entry + 2 * last["atr"]
-        sl = entry - 1.5 * last["atr"]
+        tp = last["close"] + 2 * last["atr"]
+        sl = last["close"] - 1.5 * last["atr"]
     elif (
         last["rsi"] > 30 and
         last["ema_fast"] < last["ema_slow"] and
@@ -77,15 +77,10 @@ def detect_signal(df, tolerance_pct=1.0):
         last["stoch_k"] < last["stoch_d"]
     ):
         signal = "SHORT"
-        tp = entry - 2 * last["atr"]
-        sl = entry + 1.5 * last["atr"]
+        tp = last["close"] - 2 * last["atr"]
+        sl = last["close"] + 1.5 * last["atr"]
 
-    latest_price = df["close"].iloc[-1]
-    if signal != "WAIT":
-        deviation_pct = abs(latest_price - entry) / latest_price * 100
-        if deviation_pct > tolerance_pct:
-            return "WAIT", None, None, None
-
+    entry = last["close"]
     return signal, entry, tp, sl
 
 def predict_lstm(df, n_steps=20):
@@ -93,7 +88,7 @@ def predict_lstm(df, n_steps=20):
     if len(df) < n_steps + 1:
         return None, None
     scaler = MinMaxScaler()
-    data_scaled = scaler.fit_transform(df)
+    data_scaled = scaler.fit_transform(df.values.reshape(-1, 1))
     X, y = [], []
     for i in range(n_steps, len(data_scaled)):
         X.append(data_scaled[i - n_steps:i])
@@ -105,7 +100,7 @@ def predict_lstm(df, n_steps=20):
     model.compile(optimizer="adam", loss="mse")
     model.fit(X, y, epochs=10, batch_size=16, verbose=0)
     pred_input = data_scaled[-n_steps:].reshape(1, n_steps, 1)
-    pred_scaled = model.predict(pred_input)[0][0]
+    pred_scaled = model.predict(pred_input, verbose=0)[0][0]
     pred_price = scaler.inverse_transform([[pred_scaled]])[0][0]
     direction = "Naik" if pred_price > df["close"].iloc[-1] else "Turun"
     return direction, pred_price
