@@ -130,7 +130,7 @@ def analyze_multi_timeframe(symbol, tf_trend="15", tf_entry="3"):
 st.markdown("## 📊 Daftar Sinyal Valid (LONG / SHORT)")
 summary = []
 
-for sym in symbols[:20]:  # Batasi 20 pair teratas agar tidak overload
+for sym in symbols[:20]:  # Cegah overload
     sig, ent, tp, sl, df_sym = analyze_multi_timeframe(sym, tf_trend="15", tf_entry=entry_tf)
     lstm_dir, _ = predict_lstm(df_sym)
     if sig in ["LONG", "SHORT"] and lstm_dir and ((sig == "LONG" and lstm_dir == "Naik") or (sig == "SHORT" and lstm_dir == "Turun")):
@@ -142,6 +142,10 @@ for sym in symbols[:20]:  # Batasi 20 pair teratas agar tidak overload
             "Entry": f"${ent:.2f}",
             "TP": f"${tp:.2f}",
             "SL": f"${sl:.2f}",
+            "RSI": round(last["rsi"], 2),
+            "MACD": round(last["macd"], 4),
+            "EMA Fast": round(last["ema_fast"], 2),
+            "EMA Slow": round(last["ema_slow"], 2),
             "LSTM": lstm_dir,
             "Kekuatan Sinyal": strength
         })
@@ -152,4 +156,5 @@ if summary:
     st.dataframe(df_summary.drop(columns=["Kekuatan Sinyal"]))
 else:
     st.info("Belum ada sinyal valid dari semua pair saat ini.")
+
 
