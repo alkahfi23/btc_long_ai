@@ -1,4 +1,3 @@
-
 # ========== IMPORT ==========
 import streamlit as st
 import pandas as pd
@@ -124,16 +123,16 @@ def analyze_multi_timeframe(symbol, tf_trend="15", tf_entry="3"):
     else:
         return "WAIT", None, None, None, df_entry
 
-# ========== FILTER KEYWORD ==========
+# ========== SIDEBAR ==========
 keyword = st.sidebar.text_input("🔍 Filter Pair (misal: BTC, ETH)", "").upper()
+entry_tf = st.sidebar.selectbox("🕒 Timeframe Entry", ["1", "3", "5"], index=1)
 symbols = [s for s in get_all_symbols() if keyword in s]
-
 
 # ========== DAFTAR SINYAL SEMUA PAIR ==========
 st.markdown("## 📊 Daftar Sinyal Valid (LONG / SHORT)")
 summary = []
 
-for sym in symbol[:20]:  # Cegah overload
+for sym in symbols[:20]:  # Batasi agar ringan
     sig, ent, tp, sl, df_sym = analyze_multi_timeframe(sym, tf_trend="15", tf_entry=entry_tf)
     lstm_dir, _ = predict_lstm(df_sym)
     if sig in ["LONG", "SHORT"] and lstm_dir and ((sig == "LONG" and lstm_dir == "Naik") or (sig == "SHORT" and lstm_dir == "Turun")):
@@ -159,5 +158,3 @@ if summary:
     st.dataframe(df_summary.drop(columns=["Kekuatan Sinyal"]))
 else:
     st.info("Belum ada sinyal valid dari semua pair saat ini.")
-
-
