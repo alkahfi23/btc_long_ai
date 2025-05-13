@@ -20,7 +20,7 @@ with st.sidebar:
     risk_pct = st.slider("🎯 Risiko per Transaksi (%)", min_value=0.1, max_value=5.0, value=1.0)
     interval = st.selectbox("Pilih Interval", options=["1", "5", "15", "30", "60", "240", "1440"])
     st.markdown("---")
-    st.button("🔍 Jalankan Analisis")
+    analyze_button = st.button("🔍 Jalankan Analisis")
 
 # Session state for storing results
 if 'analyzed' not in st.session_state:
@@ -151,6 +151,10 @@ def analyze_symbols(symbols, interval="60"):
     return results
 
 # Main Page Layout
+if analyze_button:
+    st.session_state.analyzed = True
+    st.session_state.results = analyze_symbols(["BTCUSDT", "ETHUSDT"], interval=interval)
+
 if st.session_state.analyzed:
     st.subheader("📊 Hasil Analisa Sinyal Lengkap")
 
