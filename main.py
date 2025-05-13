@@ -8,9 +8,11 @@ from keras.models import Sequential
 from keras.layers import LSTM, Dense
 from sklearn.preprocessing import MinMaxScaler
 
+# Set up Streamlit page
 st.set_page_config(page_title="AI BTC/ETH Signal Analyzer", layout="wide")
-st.title("🤖 AI BTC/ETH Signal Analyzer (Full Version)")
+st.title("🤖 AI BTC/ETH Signal Analyzer (Fix Entry Price & LSTM)")
 
+# Session state to avoid re-run on each input change
 if 'analyzed' not in st.session_state:
     st.session_state.analyzed = False
 if 'results' not in st.session_state:
@@ -34,28 +36,46 @@ def get_kline_data(symbol, interval="60", limit=200):
         st.error(f"Error fetching {symbol}: {e}")
         return pd.DataFrame()
 
+# Add indicators (RSI, EMA, MACD)
 def add_indicators(df):
     df["rsi"] = ta.momentum.RSIIndicator(df["close"]).rsi()
     df["ema_fast"] = ta.trend.EMAIndicator(df["close"], window=5).ema_indicator()
     df["ema_slow"] = ta.trend.EMAIndicator(df["close"], window=21).ema_indicator()
     df["macd"] = ta.trend.MACD(df["close"]).macd()
-    return df
+    return df.dropna()
 
-def detect_signal(df):
+# Detect signal based on conditions
+def detect_signal(df, tolerance_pct=1.0):
     last = df.iloc[-1]
-    signal = "WAIT"
-    tp, sl = None, None
     entry = last["close"]
-    if last["rsi"] < 70 and last["ema_fast"] > last["ema_slow"] and last["macd"] > 0:
+    signal, tp, sl = "WAIT", None, None
+
+    if (
+        last["rsi"] < 70 and
+        last["ema_fast"] > last["ema_slow"] and
+        last["macd"] > 0
+    ):
         signal = "LONG"
         tp = entry * 1.02
         sl = entry * 0.985
-    elif last["rsi"] > 30 and last["ema_fast"] < last["ema_slow"] and last["macd"] < 0:
+    elif (
+        last["rsi"] > 30 and
+        last["ema_fast"] < last["ema_slow"] and
+        last["macd"] < 0
+    ):
         signal = "SHORT"
         tp = entry * 0.98
         sl = entry * 1.015
+
+    latest_price = df["close"].iloc[-1]
+    if signal != "WAIT":
+        deviation_pct = abs(latest_price - entry) / latest_price * 100
+        if deviation_pct > tolerance_pct:
+            return "WAIT", None, None, None
+
     return signal, entry, tp, sl
 
+# LSTM model prediction
 def predict_lstm(df, n_steps=20):
     df = df[["close"]].dropna()
     if len(df) < n_steps + 1:
@@ -78,6 +98,7 @@ def predict_lstm(df, n_steps=20):
     direction = "Naik" if pred_price > df["close"].iloc[-1] else "Turun"
     return direction, pred_price
 
+# Plot candlestick chart
 def show_chart(df, symbol):
     fig = go.Figure(data=[go.Candlestick(
         x=df.index,
@@ -88,6 +109,16 @@ def show_chart(df, symbol):
     fig.update_layout(title=f'Chart {symbol}', xaxis_rangeslider_visible=False)
     st.plotly_chart(fig, use_container_width=True)
 
+# Risk Management calculations
+def hitung_risk_management(entry, sl, modal, risk_pct):
+    risk_dollar = modal * (risk_pct / 100)
+    stop_loss_distance = abs(entry - sl)
+    if stop_loss_distance == 0:
+        return 0, 0, 0, 0
+    position_size = risk_dollar / stop_loss_distance
+    return round(position_size, 4), round(risk_dollar, 2), round(stop_loss_distance, 2), round(risk_dollar / stop_loss_distance, 2)
+
+# Analyze multiple symbols (BTCUSDT, ETHUSDT)
 def analyze_symbols(symbols, interval="60"):
     results = []
     for symbol in symbols:
@@ -104,10 +135,18 @@ def analyze_symbols(symbols, interval="60"):
         })
     return results
 
+# Streamlit UI
+st.markdown("---")
+st.markdown("### 💼 Manajemen Modal")
+modal = st.number_input("💰 Modal Anda ($)", value=1000.0, step=100.0)
+risk_pct = st.slider("🎯 Risiko per Transaksi (%)", min_value=0.1, max_value=5.0, value=1.0)
+
+# Run Analysis
 if st.button("🔍 Jalankan Analisis"):
     st.session_state.analyzed = True
     st.session_state.results = analyze_symbols(["BTCUSDT", "ETHUSDT"], interval="60")
 
+# Display Results
 if st.session_state.analyzed:
     st.subheader("📊 Hasil Analisa Sinyal Lengkap")
     for res in st.session_state.results:
@@ -117,8 +156,18 @@ if st.session_state.analyzed:
             continue
         st.markdown(f"### {sym}")
         st.write(f"Sinyal: **{res['signal']}**")
-        st.write(f"Entry: ${res['entry']:.2f}")
+        st.write(f"Harga Sekarang: ${res['df']['close'].iloc[-1]:.2f}")
+        st.write(f"Entry Price: ${res['entry']:.2f}")
         st.write(f"TP: ${res['tp']:.2f}" if res['tp'] else "-")
         st.write(f"SL: ${res['sl']:.2f}" if res['sl'] else "-")
-        st.write(f"Prediksi AI LSTM: **{res['lstm']}**")
+        st.write(f"Prediksi AI (LSTM): **{res['lstm']}**")
+        
+        if res['signal'] != "WAIT" and res['tp'] and res['sl']:
+            pos_size, loss_amt, sl_dist, rr_ratio = hitung_risk_management(
+                res['entry'], res['sl'], modal, risk_pct
+            )
+            st.write(f"📌 Ukuran Posisi: **{pos_size} USDT**")
+            st.write(f"📉 Risiko: ${loss_amt} | Jarak SL: ${sl_dist}")
+            st.write(f"📈 Risk/Reward Ratio: {rr_ratio:.2f}")
+        
         show_chart(res["df"], sym)
