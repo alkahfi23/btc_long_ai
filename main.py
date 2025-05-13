@@ -180,4 +180,17 @@ if run_button:
                     name="Candles"
                 ),
                 go.Scatter(x=df_candle.index, y=df_candle["ema_fast"], line=dict(color='blue', width=1), name="EMA Fast"),
-                go.Scatter(x=df_candle.index, y=df_candle["ema_slow"], line=dict(color='
+                go.Scatter(x=df_candle.index, y=df_candle["ema_slow"], line=dict(color='orange', width=1), name="EMA Slow"),
+                go.Scatter(x=df_candle.index, y=df_candle["bb_high"], line=dict(color='green', width=1, dash='dot'), name="BB High"),
+                go.Scatter(x=df_candle.index, y=df_candle["bb_low"], line=dict(color='red', width=1, dash='dot'), name="BB Low"),
+            ])
+            fig.update_layout(
+                title=f"{row['Pair']} Candlestick + Indikator (Valid Sampai: {row['Sinyal Valid Sampai']})",
+                xaxis_rangeslider_visible=False,
+                template="plotly_dark"
+            )
+            st.plotly_chart(fig, use_container_width=True)
+
+    else:
+        st.info("Belum ada sinyal valid untuk BTCUSDT dan ETHUSDT saat ini.")
+
