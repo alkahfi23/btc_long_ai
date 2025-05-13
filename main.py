@@ -124,6 +124,9 @@ def analyze_multi_timeframe(symbol, tf_trend="15", tf_entry="3"):
     else:
         return "WAIT", None, None, None, df_entry
 
+# ========== FILTER KEYWORD ==========
+keyword = st.sidebar.text_input("🔍 Filter Pair (misal: BTC, ETH)", "").upper()
+symbols = [s for s in get_all_symbols() if keyword in s]
 
 
 # ========== DAFTAR SINYAL SEMUA PAIR ==========
