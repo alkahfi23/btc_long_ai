@@ -130,7 +130,7 @@ def analyze_multi_timeframe(symbol, tf_trend="15", tf_entry="3"):
 
     return signal, entry, tp, sl, df_entry, "✅ Valid"
 
-# ========== ANALISIS DAN VISUALISASI ==========
+# ========== EKSEKUSI ==========
 if run_button:
     symbols = ["BTCUSDT", "ETHUSDT"]
     st.markdown("## 📊 Sinyal Valid (BTCUSDT & ETHUSDT)")
@@ -142,8 +142,8 @@ if run_button:
             last = df_sym.iloc[-1]
             signal_time = last.name
             valid_until = signal_time + pd.Timedelta(minutes=15)
-
             strength = abs(last["ema_fast"] - last["ema_slow"]) + abs(last["macd"]) + abs(last["rsi"] - 50)
+
             summary.append({
                 "Pair": sym,
                 "Sinyal": sig,
@@ -160,13 +160,12 @@ if run_button:
                 "Chart Data": df_sym
             })
 
-    if summary:
+    if len(summary) > 0:
         df_summary = pd.DataFrame(summary)
-        df_display = df_summary.drop(columns=["Kekuatan Sinyal", "Chart Data"])
-        df_display = df_display.sort_values(by="Kekuatan Sinyal", ascending=False)
+        drop_cols = [col for col in ["Kekuatan Sinyal", "Chart Data"] if col in df_summary.columns]
+        df_display = df_summary.drop(columns=drop_cols)
         st.dataframe(df_display)
 
-        # ========== CHART ==========
         for row in summary:
             st.markdown(f"### 📈 {row['Pair']} ({row['Sinyal']})")
             df_candle = row["Chart Data"].copy()
@@ -182,15 +181,14 @@ if run_button:
                 go.Scatter(x=df_candle.index, y=df_candle["ema_fast"], line=dict(color='blue', width=1), name="EMA Fast"),
                 go.Scatter(x=df_candle.index, y=df_candle["ema_slow"], line=dict(color='orange', width=1), name="EMA Slow"),
                 go.Scatter(x=df_candle.index, y=df_candle["bb_high"], line=dict(color='green', width=1, dash='dot'), name="BB High"),
-                go.Scatter(x=df_candle.index, y=df_candle["bb_low"], line=dict(color='red', width=1, dash='dot'), name="BB Low"),
+                go.Scatter(x=df_candle.index, y=df_candle["bb_low"], line=dict(color='red', width=1, dash='dot'), name="BB Low")
             ])
             fig.update_layout(
-                title=f"{row['Pair']} Candlestick + Indikator (Valid Sampai: {row['Sinyal Valid Sampai']})",
+                title=f"{row['Pair']} Chart Candlestick (Sinyal: {row['Sinyal']}, Valid Sampai: {row['Sinyal Valid Sampai']})",
                 xaxis_rangeslider_visible=False,
-                template="plotly_dark"
+                template="plotly_dark",
+                height=500
             )
             st.plotly_chart(fig, use_container_width=True)
-
     else:
         st.info("Belum ada sinyal valid untuk BTCUSDT dan ETHUSDT saat ini.")
-
