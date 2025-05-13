@@ -11,7 +11,7 @@ from sklearn.preprocessing import MinMaxScaler
 
 # ========== KONFIGURASI ==========
 st.set_page_config(page_title="AI BTC Signal Analyzer", layout="wide")
-st.title("🤖 AI BTC Signal Analyzer (Multi-Timeframe Strategy)")
+st.title("🤖 AI BTC Signal Analyzer (Optimized for BTCUSDT & ETHUSDT)")
 
 # ========== API ==========
 @st.cache_data(ttl=60)
@@ -41,8 +41,9 @@ def add_indicators(df):
     df["bb_low"] = bb.bollinger_lband()
     return df
 
-# ========== LSTM ==========
-def predict_lstm(df, n_steps=20):
+# ========== LSTM Prediction ==========
+@st.cache_resource(show_spinner=False)
+def train_lstm_model(df, n_steps=20):
     df = df[["close"]].dropna()
     if len(df) < n_steps + 1:
         return None, None
@@ -60,15 +61,20 @@ def predict_lstm(df, n_steps=20):
     model.add(Dense(1))
     model.compile(optimizer='adam', loss='mse')
     model.fit(X, y, epochs=10, batch_size=16, verbose=0)
+    return model, scaler
 
+def predict_lstm_price(df, model, scaler, n_steps=20):
+    df = df[["close"]].dropna()
+    if len(df) < n_steps + 1:
+        return "WAIT", None
+    data_scaled = scaler.transform(df)
     input_data = data_scaled[-n_steps:].reshape((1, n_steps, 1))
     predicted_scaled = model.predict(input_data)[0][0]
     predicted_price = scaler.inverse_transform([[predicted_scaled]])[0][0]
-
     direction = "Naik" if predicted_price > df["close"].iloc[-1] else "Turun"
     return direction, predicted_price
 
-# ========== SINYAL ==========
+# ========== SIGNAL ==========
 def detect_signal(df):
     if df.empty: return "WAIT", None, None, None
     last = df.iloc[-1]
@@ -92,53 +98,47 @@ def detect_signal(df):
     else:
         return "WAIT", None, None, None
 
+# ========== ANALYSIS MULTI-TIMEFRAME ==========
 def analyze_multi_timeframe(symbol, tf_trend="15", tf_entry="3"):
     df_trend = get_kline_data(symbol, tf_trend)
     df_entry = get_kline_data(symbol, tf_entry)
-    if df_trend.empty or df_entry.empty: return "NO DATA", None, None, None, df_entry
+    if df_trend.empty or df_entry.empty:
+        return "NO DATA", None, None, None, df_entry, "-"
 
     df_trend = add_indicators(df_trend)
     df_entry = add_indicators(df_entry)
+
     trend = df_trend.iloc[-1]
     trend_long = trend["ema_fast"] > trend["ema_slow"] and trend["macd"] > 0
     trend_short = trend["ema_fast"] < trend["ema_slow"] and trend["macd"] < 0
 
     signal, entry, tp, sl = detect_signal(df_entry)
-    lstm_dir, _ = predict_lstm(df_entry)
-
-    if signal == "LONG" and trend_long and lstm_dir == "Naik":
-        return signal, entry, tp, sl, df_entry
-    elif signal == "SHORT" and trend_short and lstm_dir == "Turun":
-        return signal, entry, tp, sl, df_entry
-    else:
-        return "WAIT", None, None, None, df_entry
+    model, scaler = train_lstm_model(df_entry)
+    lstm_dir, _ = predict_lstm_price(df_entry, model, scaler)
 
     if signal in ["LONG", "SHORT"] and entry and sl and tp:
         risk = abs(entry - sl)
         reward = abs(tp - entry)
         risk_reward = reward / risk if risk != 0 else 0
-        sl_distance_pct = abs(entry - sl) / entry * 100
+        sl_pct = abs(entry - sl) / entry * 100
 
-        if risk_reward < 1 or sl_distance_pct < 0.5:
-            warning = "⚠️ Risiko tinggi (SL terlalu dekat atau R:R jelek)"
-            return "WAIT", None, None, None, df_entry, warning
+        if risk_reward < 1 or sl_pct < 0.5:
+            return "WAIT", None, None, None, df_entry, "⚠️ R:R buruk atau SL terlalu dekat"
 
     if signal == "LONG" and trend_long and lstm_dir == "Naik":
-        return signal, entry, tp, sl, df_entry, "✅ Aman"
+        return signal, entry, tp, sl, df_entry, "✅ Confirmed"
     elif signal == "SHORT" and trend_short and lstm_dir == "Turun":
-        return signal, entry, tp, sl, df_entry, "✅ Aman"
+        return signal, entry, tp, sl, df_entry, "✅ Confirmed"
     else:
         return "WAIT", None, None, None, df_entry, "Not Confirmed"
 
-# ========== ANALISIS KHUSUS BTCUSDT & ETHUSDT ==========
+# ========== TAMPILKAN ==========
 symbols = ["BTCUSDT", "ETHUSDT"]
-
 st.markdown("## 📊 Sinyal Valid (BTCUSDT & ETHUSDT)")
 summary = []
 
 for sym in symbols:
-    sig, ent, tp, sl, df_sym, note = analyze_multi_timeframe(sym, tf_trend="15", tf_entry="3")
-    lstm_dir, _ = predict_lstm(df_sym)
+    sig, ent, tp, sl, df_sym, note = analyze_multi_timeframe(sym)
     if sig in ["LONG", "SHORT"]:
         last = df_sym.iloc[-1]
         strength = abs(last["ema_fast"] - last["ema_slow"]) + abs(last["macd"]) + abs(last["rsi"] - 50)
@@ -152,11 +152,9 @@ for sym in symbols:
             "MACD": round(last["macd"], 4),
             "EMA Fast": round(last["ema_fast"], 2),
             "EMA Slow": round(last["ema_slow"], 2),
-            "LSTM": lstm_dir or "-",
             "Catatan Risiko": note,
             "Kekuatan Sinyal": strength
         })
-
 
 if summary:
     df_summary = pd.DataFrame(summary)
@@ -164,4 +162,3 @@ if summary:
     st.dataframe(df_summary.drop(columns=["Kekuatan Sinyal"]))
 else:
     st.info("Belum ada sinyal valid untuk BTCUSDT dan ETHUSDT saat ini.")
-
