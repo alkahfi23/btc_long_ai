@@ -1,7 +1,9 @@
 streamlit
 pandas
 requests
-ta
 plotly
+ta
+numpy
+scikit-learn
+tensorflow
 statsmodels
-
