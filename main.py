@@ -1,3 +1,4 @@
+
 # ========== IMPORT ==========
 import streamlit as st
 import pandas as pd
@@ -123,72 +124,32 @@ def analyze_multi_timeframe(symbol, tf_trend="15", tf_entry="3"):
     else:
         return "WAIT", None, None, None, df_entry
 
-# ========== POSISI ==========
-def calculate_position_size(balance, entry, sl, leverage=10, risk_pct=1.0, min_sl_pct=0.7):
-    if entry == 0 or sl == 0:
-        return 0.0
-    stop_range = abs(entry - sl)
-    if (stop_range / entry) * 100 < min_sl_pct:
-        st.warning(f"⚠️ Stop Loss terlalu dekat ({(stop_range / entry) * 100:.2f}%). Risiko tinggi.")
-        return 0.0
-    risk_amount = balance * (risk_pct / 100)
-    qty = risk_amount / (stop_range / entry)
-    max_qty = (balance * leverage) / entry
-    return round(min(qty, max_qty) * 0.9, 3)
 
-# ========== TRAILING STOP ==========
-def calculate_trailing_stop(entry, volatility, direction="LONG", multiplier=1.5):
-    return entry - volatility * multiplier if direction == "LONG" else entry + volatility * multiplier
 
-# ========== VOLATILITAS ==========
-def estimate_volatility(df, window=14):
-    if df.empty or len(df) < window: return 0.0
-    returns = df["close"].pct_change()
-    return (returns.rolling(window=window).std() * df["close"]).iloc[-1]
+# ========== DAFTAR SINYAL SEMUA PAIR ==========
+st.markdown("## 📊 Daftar Sinyal Valid (LONG / SHORT)")
+summary = []
 
-# ========== CHART ==========
-def plot_chart(df):
-    fig = go.Figure()
-    fig.add_trace(go.Candlestick(x=df.index, open=df["open"], high=df["high"], low=df["low"], close=df["close"], name="Candlestick"))
-    fig.add_trace(go.Scatter(x=df.index, y=df["ema_fast"], name="EMA 5", line=dict(color="blue")))
-    fig.add_trace(go.Scatter(x=df.index, y=df["ema_slow"], name="EMA 21", line=dict(color="orange")))
-    fig.update_layout(title="📉 Grafik Candlestick", height=500)
-    return fig
+for sym in symbols[:20]:  # Batasi 20 pair teratas agar tidak overload
+    sig, ent, tp, sl, df_sym = analyze_multi_timeframe(sym, tf_trend="15", tf_entry=entry_tf)
+    lstm_dir, _ = predict_lstm(df_sym)
+    if sig in ["LONG", "SHORT"] and lstm_dir and ((sig == "LONG" and lstm_dir == "Naik") or (sig == "SHORT" and lstm_dir == "Turun")):
+        last = df_sym.iloc[-1]
+        strength = abs(last["ema_fast"] - last["ema_slow"]) + abs(last["macd"]) + abs(last["rsi"] - 50)
+        summary.append({
+            "Pair": sym,
+            "Sinyal": sig,
+            "Entry": f"${ent:.2f}",
+            "TP": f"${tp:.2f}",
+            "SL": f"${sl:.2f}",
+            "LSTM": lstm_dir,
+            "Kekuatan Sinyal": strength
+        })
 
-# ========== UI ==========
-symbols = get_all_symbols()
-symbol = st.sidebar.selectbox("🔄 Pilih Pair", symbols, index=symbols.index("BTCUSDT") if "BTCUSDT" in symbols else 0)
-entry_tf = st.sidebar.selectbox("⏱️ Timeframe Entry", ["1", "3", "5", "15", "30", "60"], index=1)
-balance = st.sidebar.number_input("💰 Modal (USDT)", min_value=10.0, value=100.0)
-leverage = st.sidebar.slider("⚙️ Leverage", 1, 100, 10)
-
-# ========== ANALISIS ==========
-signal, entry_price, take_profit, stop_loss, df_plot = analyze_multi_timeframe(symbol, tf_trend="15", tf_entry=entry_tf)
-lstm_dir, lstm_pred = predict_lstm(df_plot)
-
-# ========== TAMPILKAN HASIL ==========
-st.subheader(f"📡 Sinyal AI (Multi TF + LSTM): **{signal}** | Prediksi: **{lstm_dir}** (${lstm_pred:.4f})" if lstm_pred else f"📡 Sinyal AI: {signal}")
-
-if signal != "WAIT" and lstm_dir and signal != lstm_dir.upper():
-    st.warning(f"⚠️ Konflik antara sinyal `{signal}` dan prediksi LSTM `{lstm_dir}`. Hindari open posisi.")
-
-if signal in ["LONG", "SHORT"]:
-    volatility = estimate_volatility(df_plot)
-    trailing_sl = calculate_trailing_stop(entry_price, volatility, signal)
-    position = calculate_position_size(balance, entry_price, trailing_sl, leverage)
-    
-    col1, col2 = st.columns(2)
-    with col1:
-        st.metric("🎯 Entry", f"${entry_price:.4f}")
-        st.metric("✅ Take Profit", f"${take_profit:.4f}")
-    with col2:
-        st.metric("🛑 Trailing Stop", f"${trailing_sl:.4f}")
-        st.metric("📦 Posisi", f"{position} kontrak")
-    st.caption(f"(Leverage {leverage}x | Modal ${balance:.2f})")
+if summary:
+    df_summary = pd.DataFrame(summary)
+    df_summary = df_summary.sort_values(by="Kekuatan Sinyal", ascending=False)
+    st.dataframe(df_summary.drop(columns=["Kekuatan Sinyal"]))
 else:
-    st.info("⏳ AI menunggu sinyal ideal...")
+    st.info("Belum ada sinyal valid dari semua pair saat ini.")
 
-if not df_plot.empty:
-    st.plotly_chart(plot_chart(df_plot), use_container_width=True)
-    st.markdown("### 📌 Ringkasan Indikator")
-    st.dataframe(df_plot[["close", "rsi", "ema_fast", "ema_slow", "macd"]].tail(5).round(2))
