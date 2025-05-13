@@ -14,9 +14,9 @@ from keras.layers import LSTM, Dense
 st.set_page_config(page_title="AI BTC/ETH Signal Analyzer", layout="wide")
 st.title("🤖 AI BTC/ETH Signal Analyzer (with LSTM & Chart)")
 
-# ========== API HISTORICAL DATA ========== #
+# ========== API HISTORICAL DATA BYBIT ========== #
 @st.cache_data(ttl=600)
-def get_historical_data(symbol="BTCUSDT", interval="60"):
+def get_bybit_data(symbol="BTCUSDT", interval="60"):
     dfs = []
     limit = 200  # Max per API call
     now = int(datetime.datetime.now().timestamp() * 1000)
@@ -35,15 +35,40 @@ def get_historical_data(symbol="BTCUSDT", interval="60"):
             "start": start,
             "end": end
         }
+        try:
+            r = requests.get(url, params=params)
+            if r.status_code == 200 and "result" in r.json():
+                data = r.json()["result"]["list"]
+                df = pd.DataFrame(data, columns=["timestamp", "open", "high", "low", "close", "volume", "turnover"])
+                df = df.astype(float)
+                df["timestamp"] = pd.to_datetime(df["timestamp"], unit="ms")
+                df.set_index("timestamp", inplace=True)
+                dfs.append(df)
+        except Exception as e:
+            print(f"Bybit API error: {e}")
+    return pd.concat(dfs).sort_index() if dfs else pd.DataFrame()
+
+# ========== API HISTORICAL DATA BINANCE (fallback) ========== #
+@st.cache_data(ttl=600)
+def get_binance_data(symbol="BTCUSDT", interval="60"):
+    url = f"https://api.binance.com/api/v1/klines"
+    params = {
+        "symbol": symbol,
+        "interval": interval,
+        "limit": 200  # Max per API call
+    }
+    try:
         r = requests.get(url, params=params)
-        if r.status_code == 200 and "result" in r.json():
-            data = r.json()["result"]["list"]
-            df = pd.DataFrame(data, columns=["timestamp", "open", "high", "low", "close", "volume", "turnover"])
+        if r.status_code == 200:
+            data = r.json()
+            df = pd.DataFrame(data, columns=["timestamp", "open", "high", "low", "close", "volume", "close_time", "quote_asset_vol", "number_of_trades", "taker_buy_base_vol", "taker_buy_quote_vol", "ignore"])
             df = df.astype(float)
             df["timestamp"] = pd.to_datetime(df["timestamp"], unit="ms")
             df.set_index("timestamp", inplace=True)
-            dfs.append(df)
-    return pd.concat(dfs).sort_index() if dfs else pd.DataFrame()
+            return df
+    except Exception as e:
+        print(f"Binance API error: {e}")
+    return pd.DataFrame()
 
 # ========== INDICATORS ========== #
 def add_indicators(df):
@@ -134,10 +159,13 @@ def plot_chart(df, symbol, fib_levels=None):
 
 # ========== ANALISA & TAMPILKAN ========== #
 def analyze(symbol):
-    df = get_historical_data(symbol)
+    df = get_bybit_data(symbol)  # Try Bybit first
     if df.empty:
-        st.error(f"Tidak bisa memuat data untuk {symbol}")
-        return
+        st.warning(f"📉 Data Bybit untuk {symbol} tidak ditemukan, mencoba menggunakan Binance...")
+        df = get_binance_data(symbol)  # Fallback to Binance
+        if df.empty:
+            st.error(f"❌ Gagal mendapatkan data untuk {symbol} dari kedua API (Bybit dan Binance).")
+            return
 
     df = add_indicators(df)
     fib_levels = fibonacci_levels(df)
@@ -166,5 +194,8 @@ def analyze(symbol):
 symbols = ["BTCUSDT", "ETHUSDT"]
 if st.button("🚀 Jalankan Analisis Sekarang"):
     for sym in symbols:
-        with st.expander(f"📊 Analisa {sym}", expanded=True):
-            analyze(sym)
+        try:
+            with st.expander(f"📊 Analisa {sym}", expanded=True):
+                analyze(sym)
+        except Exception as e:
+            st.warning(f"⚠️ Gagal menganalisis {sym}: {e}")
