@@ -8,21 +8,10 @@ from keras.models import Sequential
 from keras.layers import LSTM, Dense
 from sklearn.preprocessing import MinMaxScaler
 
-# Set up Streamlit page
 st.set_page_config(page_title="AI BTC/ETH Signal Analyzer", layout="wide")
 st.markdown("<h1 style='text-align: center; color: #4A90E2;'>🤖 AI Signal Analyzer</h1>", unsafe_allow_html=True)
 st.markdown("<h4 style='text-align: center;'>BTC/ETH Analyzer with AI-Powered Entry & Risk Tools</h4>", unsafe_allow_html=True)
 
-# Sidebar for input settings
-with st.sidebar:
-    st.header("💼 Pengaturan Analisis")
-    modal = st.number_input("💰 Modal Anda ($)", value=1000.0, step=100.0)
-    risk_pct = st.slider("🎯 Risiko per Transaksi (%)", min_value=0.1, max_value=5.0, value=1.0)
-    interval = st.selectbox("Pilih Interval", options=["1", "5", "15", "30", "60", "240", "1440"])
-    st.markdown("---")
-    analyze_button = st.button("🔍 Jalankan Analisis")
-
-# Session state for storing results
 if 'analyzed' not in st.session_state:
     st.session_state.analyzed = False
 if 'results' not in st.session_state:
@@ -97,7 +86,7 @@ def detect_signal(df, tolerance_pct=1.0):
 def predict_lstm(df, n_steps=20):
     df = df[["close"]].dropna()
     if len(df) < n_steps + 1:
-        return "Tidak cukup data", None  # Tambahan ini jika data tidak cukup
+        return None, None
     scaler = MinMaxScaler()
     data_scaled = scaler.fit_transform(df.values.reshape(-1, 1))
     X, y = [], []
@@ -127,12 +116,25 @@ def show_chart(df, symbol):
     st.plotly_chart(fig, use_container_width=True)
 
 def hitung_risk_management(entry, sl, modal, risk_pct):
+    # Risiko dolar yang akan dipertaruhkan
     risk_dollar = modal * (risk_pct / 100)
+
+    # Jarak dari entry ke stop loss
     stop_loss_distance = abs(entry - sl)
+    
+    # Menghindari pembagian dengan nol jika entry sama dengan SL
     if stop_loss_distance == 0:
         return 0, 0, 0, 0
+
+    # Ukuran posisi dihitung berdasarkan risiko dolar yang dapat diterima dibagi dengan jarak SL
     position_size = risk_dollar / stop_loss_distance
-    return round(position_size, 4), round(risk_dollar, 2), round(stop_loss_distance, 2), round(risk_dollar / stop_loss_distance, 2)
+    
+    # Menghitung Risk/Reward Ratio (RRR)
+    target_profit = entry + (entry - sl) * 2 if entry > sl else entry - (sl - entry) * 2
+    reward_distance = abs(target_profit - entry)
+    rr_ratio = reward_distance / stop_loss_distance if stop_loss_distance != 0 else 0
+    
+    return round(position_size, 4), round(risk_dollar, 2), round(stop_loss_distance, 2), round(rr_ratio, 2)
 
 def analyze_symbols(symbols, interval="60"):
     results = []
@@ -150,24 +152,23 @@ def analyze_symbols(symbols, interval="60"):
         })
     return results
 
-# Main Page Layout
-if analyze_button:
+st.markdown("---")
+st.markdown("### 💼 Manajemen Modal")
+modal = st.number_input("💰 Modal Anda ($)", value=1000.0, step=100.0)
+risk_pct = st.slider("🎯 Risiko per Transaksi (%)", min_value=0.1, max_value=5.0, value=1.0)
+
+if st.button("🔍 Jalankan Analisis"):
     st.session_state.analyzed = True
-    st.session_state.results = analyze_symbols(["BTCUSDT", "ETHUSDT"], interval=interval)
+    st.session_state.results = analyze_symbols(["BTCUSDT", "ETHUSDT"], interval="60")
 
 if st.session_state.analyzed:
     st.subheader("📊 Hasil Analisa Sinyal Lengkap")
-
-    # Loop over results and display each symbol
     for res in st.session_state.results:
         sym = res["symbol"]
-        st.markdown(f"### {sym}")
-
         if res["signal"] == "NO DATA":
             st.error(f"{sym}: Gagal mengambil data.")
             continue
-
-        # Display Signal Information
+        st.markdown(f"### {sym}")
         st.write(f"Sinyal: **{res['signal']}**")
         st.write(f"Harga Sekarang: ${res['df']['close'].iloc[-1]:.2f}")
         st.write(f"Entry Price: ${res['entry']:.2f}")
