@@ -3,6 +3,8 @@ import pandas as pd
 import requests
 import plotly.graph_objects as go
 import ta
+from statsmodels.tsa.arima.model import ARIMA
+import numpy as np
 
 st.set_page_config(page_title="AI BTC Signal Analyzer", layout="wide")
 st.title("📊 AI BTC Signal Analyzer (Multi-Timeframe Strategy)")
@@ -43,38 +45,18 @@ def add_indicators(df):
     df["macd"] = ta.trend.MACD(df["close"]).macd()
     return df
 
-def adjust_stop_loss(entry, stop_loss, volatility, min_pct=0.5):
-    """
-    Sesuaikan SL jika terlalu dekat berdasarkan volatilitas dan minimum %.
-    """
-    min_distance = entry * (min_pct / 100)
-    volatility_buffer = entry * (volatility / 100) * 0.5
-    distance = abs(entry - stop_loss)
-
-    if distance < min_distance or distance < volatility_buffer:
-        # SL disesuaikan agar tidak terlalu dekat
-        sl_direction = -1 if stop_loss < entry else 1
-        new_sl = entry + sl_direction * max(min_distance, volatility_buffer)
-        return new_sl
-    return stop_loss
-
-def detect_signal(df, volatility):
+def detect_signal(df):
     if df.empty:
         return "NO DATA", None, None, None
     last = df.iloc[-1]
     long_cond = (last["rsi"] < 70 and last["ema_fast"] > last["ema_slow"] and last["macd"] > 0)
     short_cond = (last["rsi"] > 30 and last["ema_fast"] < last["ema_slow"] and last["macd"] < 0)
-    
     if long_cond:
         entry = last["close"]
-        sl = entry * 0.99
-        sl = adjust_stop_loss(entry, sl, volatility)
-        return "LONG", entry, entry * 1.02, sl
+        return "LONG", entry, entry * 1.02, entry * 0.99
     elif short_cond:
         entry = last["close"]
-        sl = entry * 1.01
-        sl = adjust_stop_loss(entry, sl, volatility)
-        return "SHORT", entry, entry * 0.98, sl
+        return "SHORT", entry, entry * 0.98, entry * 1.01
     else:
         return "WAIT", None, None, None
 
@@ -87,13 +69,12 @@ def analyze_multi_timeframe(symbol, tf_trend="15", tf_entry="3", limit=100):
     df_trend = add_indicators(df_trend)
     df_entry = add_indicators(df_entry)
 
+    # Validasi tren
     trend = df_trend.iloc[-1]
     trend_long = trend["ema_fast"] > trend["ema_slow"] and trend["macd"] > 0
     trend_short = trend["ema_fast"] < trend["ema_slow"] and trend["macd"] < 0
 
-    volatility = estimate_historical_volatility(df_entry)
-
-    signal, entry, tp, sl = detect_signal(df_entry, volatility)
+    signal, entry, tp, sl = detect_signal(df_entry)
     if signal == "LONG" and trend_long:
         return "LONG", entry, tp, sl, df_entry
     elif signal == "SHORT" and trend_short:
@@ -103,9 +84,6 @@ def analyze_multi_timeframe(symbol, tf_trend="15", tf_entry="3", limit=100):
 
 # ================== VOLATILITY & MARGIN RISK ==================
 def estimate_historical_volatility(df, window=14):
-    """
-    Estimasi volatilitas berdasarkan standard deviasi return harga.
-    """
     if df.empty or len(df) < window:
         return 0.0
     returns = df["close"].pct_change()
@@ -126,8 +104,23 @@ def estimate_margin_call_risk(entry, stop_loss, leverage, historical_volatility)
     else:
         return "🚨 Risiko Margin Call: Tinggi"
 
+# ================== PREDIKSI ARAH PASAR ==================
+def predict_market_direction(df, steps=1):
+    # Menggunakan ARIMA untuk memprediksi harga masa depan
+    if df.empty or len(df) < 20:
+        return "Tidak cukup data untuk prediksi", 0.0
+    
+    model = ARIMA(df['close'], order=(5, 1, 0))  # Pengaturan sederhana
+    model_fit = model.fit()
+    forecast = model_fit.forecast(steps=steps)
+    
+    forecast_direction = "Naik" if forecast[-1] > df['close'].iloc[-1] else "Turun"
+    predicted_price = forecast[-1]
+    
+    return forecast_direction, predicted_price
+
 # ================== POSISI AMAN ==================
-def calculate_position_size(balance, entry, sl, leverage=10, risk_pct=1.0, min_sl_pct=0.5, margin_type="isolated"):
+def calculate_position_size(balance, entry, sl, leverage=10, risk_pct=1.0, min_sl_pct=0.5):
     if entry == 0 or sl == 0:
         return 0.0
     stop_range = abs(entry - sl)
@@ -140,11 +133,6 @@ def calculate_position_size(balance, entry, sl, leverage=10, risk_pct=1.0, min_s
     qty = risk_amount / (stop_range / entry)
     max_qty = (balance * leverage) / entry
     safe_qty = min(qty, max_qty) * 0.9
-
-    # Adjust position size based on margin type (cross vs isolated)
-    if margin_type == "cross":
-        # For cross margin, the available margin is shared across all positions
-        safe_qty *= 1.5  # Allow for larger positions in cross margin
     return round(safe_qty, 3)
 
 # ================== CHART ==================
@@ -176,14 +164,13 @@ symbol = st.sidebar.selectbox("🔄 Pilih Pair:", symbols, index=symbols.index("
 entry_tf = st.sidebar.selectbox("⏱️ Timeframe Entry:", ["1", "3", "5", "15", "30", "60"], index=1)
 balance = st.sidebar.number_input("💰 Modal (USDT):", min_value=10.0, value=100.0)
 leverage = st.sidebar.slider("⚙️ Leverage", 1, 100, 10)
-margin_type = st.sidebar.selectbox("💼 Jenis Margin:", ["Isolated", "Cross"])
 
 # ================== ANALISA ==================
 signal, entry_price, take_profit, stop_loss, df_plot = analyze_multi_timeframe(symbol, tf_trend="15", tf_entry=entry_tf)
 
 st.subheader(f"🤖 Sinyal AI (Multi-Timeframe): **{signal}**")
 if signal in ["LONG", "SHORT"]:
-    position_size = calculate_position_size(balance, entry_price, stop_loss, leverage, margin_type=margin_type)
+    position_size = calculate_position_size(balance, entry_price, stop_loss, leverage)
     arah = "📈 LONG (Naik)" if signal == "LONG" else "📉 SHORT (Turun)"
     col1, col2 = st.columns(2)
     with col1:
@@ -192,7 +179,7 @@ if signal in ["LONG", "SHORT"]:
     with col2:
         st.metric("🛑 Stop Loss", f"${stop_loss:.4f}")
         st.metric("📦 Posisi", f"{position_size} kontrak")
-    st.caption(f"(Leverage {leverage}x | Modal ${balance:.2f})")
+    st.caption(f"(Leverage {leverage}x | Modal ${balance})")
 
     # Estimasi Volatilitas & Margin Risk
     hist_vol = estimate_historical_volatility(df_plot)
@@ -201,6 +188,12 @@ if signal in ["LONG", "SHORT"]:
     st.warning(risk_warning)
 else:
     st.info("⏳ AI menunggu setup ideal di TF kecil *dan* arah tren besar yang sesuai.")
+
+# ================== PREDIKSI ARAH PASAR ==================
+forecast_direction, predicted_price = predict_market_direction(df_plot)
+st.subheader("📉 Prediksi Arah Pasar:")
+st.write(f"Arah pasar diprediksi: **{forecast_direction}**")
+st.write(f"Prediksi harga berikutnya: ${predicted_price:.4f}")
 
 # ================== GRAFIK & RINGKASAN ==================
 if not df_plot.empty:
