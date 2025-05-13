@@ -127,7 +127,7 @@ def estimate_margin_call_risk(entry, stop_loss, leverage, historical_volatility)
         return "🚨 Risiko Margin Call: Tinggi"
 
 # ================== POSISI AMAN ==================
-def calculate_position_size(balance, entry, sl, leverage=10, risk_pct=1.0, min_sl_pct=0.5):
+def calculate_position_size(balance, entry, sl, leverage=10, risk_pct=1.0, min_sl_pct=0.5, margin_type="isolated"):
     if entry == 0 or sl == 0:
         return 0.0
     stop_range = abs(entry - sl)
@@ -140,6 +140,11 @@ def calculate_position_size(balance, entry, sl, leverage=10, risk_pct=1.0, min_s
     qty = risk_amount / (stop_range / entry)
     max_qty = (balance * leverage) / entry
     safe_qty = min(qty, max_qty) * 0.9
+
+    # Adjust position size based on margin type (cross vs isolated)
+    if margin_type == "cross":
+        # For cross margin, the available margin is shared across all positions
+        safe_qty *= 1.5  # Allow for larger positions in cross margin
     return round(safe_qty, 3)
 
 # ================== CHART ==================
@@ -171,13 +176,14 @@ symbol = st.sidebar.selectbox("🔄 Pilih Pair:", symbols, index=symbols.index("
 entry_tf = st.sidebar.selectbox("⏱️ Timeframe Entry:", ["1", "3", "5", "15", "30", "60"], index=1)
 balance = st.sidebar.number_input("💰 Modal (USDT):", min_value=10.0, value=100.0)
 leverage = st.sidebar.slider("⚙️ Leverage", 1, 100, 10)
+margin_type = st.sidebar.selectbox("💼 Jenis Margin:", ["Isolated", "Cross"])
 
 # ================== ANALISA ==================
 signal, entry_price, take_profit, stop_loss, df_plot = analyze_multi_timeframe(symbol, tf_trend="15", tf_entry=entry_tf)
 
 st.subheader(f"🤖 Sinyal AI (Multi-Timeframe): **{signal}**")
 if signal in ["LONG", "SHORT"]:
-    position_size = calculate_position_size(balance, entry_price, stop_loss, leverage)
+    position_size = calculate_position_size(balance, entry_price, stop_loss, leverage, margin_type=margin_type)
     arah = "📈 LONG (Naik)" if signal == "LONG" else "📉 SHORT (Turun)"
     col1, col2 = st.columns(2)
     with col1:
