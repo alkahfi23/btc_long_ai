@@ -178,24 +178,18 @@ def analyze(symbol):
         st.write(f"🎯 TP: `${tp:.2f}`")
         st.write(f"🛑 SL: `${sl:.2f}`")
 
-    st.subheader("🧠 Prediksi AI (LSTM)")
-    with st.spinner("Melatih model LSTM..."):
-        model, scaler = train_lstm_model(df)
-        pred_price = predict_future_price(df, model, scaler)
-        st.success(f"📈 Prediksi Harga Selanjutnya: **${pred_price:.2f}**")
+    st.subheader("🧠 Prediksi AI (LSTM Model)")
 
-    st.subheader("📈 Visualisasi Chart & Fibonacci")
+    # Train model if necessary
+    model, scaler = train_lstm_model(df)
+    pred_price = predict_future_price(df, model, scaler)
+    st.write(f"📈 Prediksi Harga Masa Depan: ${pred_price:.2f}")
+
+    # Plot technical chart
     plot_chart(df, symbol, fib_levels)
 
-    st.subheader("📏 Fibonacci Levels")
-    st.json(fib_levels)
-
-# ========== UI ========== #
-symbols = ["BTCUSDT", "ETHUSDT"]
-if st.button("🚀 Jalankan Analisis Sekarang"):
-    for sym in symbols:
-        try:
-            with st.expander(f"📊 Analisa {sym}", expanded=True):
-                analyze(sym)
-        except Exception as e:
-            st.warning(f"⚠️ Gagal menganalisis {sym}: {e}")
+# ========== MAIN PROGRAM ========== #
+if st.button('Jalankan Analisis'):
+    symbols = ["BTCUSDT", "ETHUSDT"]
+    for symbol in symbols:
+        analyze(symbol)
