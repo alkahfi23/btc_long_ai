@@ -8,10 +8,12 @@ from keras.models import Sequential
 from keras.layers import LSTM, Dense
 from sklearn.preprocessing import MinMaxScaler
 
+# Set up Streamlit page
 st.set_page_config(page_title="AI BTC/ETH Signal Analyzer", layout="wide")
 st.markdown("<h1 style='text-align: center; color: #4A90E2;'>🤖 AI Signal Analyzer</h1>", unsafe_allow_html=True)
 st.markdown("<h4 style='text-align: center;'>BTC/ETH Analyzer with AI-Powered Entry & Risk Tools</h4>", unsafe_allow_html=True)
 
+# Session state to avoid re-run on each input change
 if 'analyzed' not in st.session_state:
     st.session_state.analyzed = False
 if 'results' not in st.session_state:
@@ -86,7 +88,7 @@ def detect_signal(df, tolerance_pct=1.0):
 def predict_lstm(df, n_steps=20):
     df = df[["close"]].dropna()
     if len(df) < n_steps + 1:
-        return None, None
+        return "Tidak cukup data", None  # Tambahan ini jika data tidak cukup
     scaler = MinMaxScaler()
     data_scaled = scaler.fit_transform(df.values.reshape(-1, 1))
     X, y = [], []
@@ -139,15 +141,20 @@ def analyze_symbols(symbols, interval="60"):
         })
     return results
 
+# Streamlit UI
 st.markdown("---")
 st.markdown("### 💼 Manajemen Modal")
 modal = st.number_input("💰 Modal Anda ($)", value=1000.0, step=100.0)
 risk_pct = st.slider("🎯 Risiko per Transaksi (%)", min_value=0.1, max_value=5.0, value=1.0)
 
+interval = st.selectbox("Pilih Interval", options=["1", "5", "15", "30", "60", "240", "1440"])
+
+# Run Analysis
 if st.button("🔍 Jalankan Analisis"):
     st.session_state.analyzed = True
-    st.session_state.results = analyze_symbols(["BTCUSDT", "ETHUSDT"], interval="60")
+    st.session_state.results = analyze_symbols(["BTCUSDT", "ETHUSDT"], interval=interval)
 
+# Display Results
 if st.session_state.analyzed:
     st.subheader("📊 Hasil Analisa Sinyal Lengkap")
     for res in st.session_state.results:
