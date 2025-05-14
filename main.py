@@ -3,38 +3,29 @@ import pandas as pd
 import numpy as np
 import ta
 import plotly.graph_objects as go
-from binance.client import Client  # Import client untuk autentikasi
-from binance.websockets import BinanceSocketManager  # WebSocket Manager untuk futures
 from datetime import datetime
 import requests
 import threading
 import time
-from dotenv import load_dotenv
+import json
+from websocket import WebSocketApp
 import os
+from dotenv import load_dotenv
 
-# Muat file .env untuk mendapatkan API key dan Secret key secara aman
 load_dotenv()
 
-API_KEY = os.getenv('BINANCE_API_KEY')
-API_SECRET = os.getenv('BINANCE_API_SECRET')
-
-if not API_KEY or not API_SECRET:
-    st.error("API Key atau Secret Key belum disetting. Pastikan file .env sudah ada.")
-    st.stop()
-
-# Konfigurasi Streamlit
 st.set_page_config(page_title="AI Crypto Signal Analyzer", layout="wide")
 st.title("📊 AI Crypto Signal Analyzer (Real-Time Binance Futures)")
 st.sidebar.title("🔧 Pengaturan Analisa")
 
-# Fungsi untuk mengambil semua pair USDT dari Binance
+# Ambil semua symbol USDT dari Binance Futures
 @st.cache_data(ttl=600)
 def get_binance_usdt_pairs():
-    url = "https://api.binance.com/api/v3/exchangeInfo"
+    url = "https://fapi.binance.com/fapi/v1/exchangeInfo"
     try:
         response = requests.get(url, timeout=10)
         data = response.json()
-        symbols = [s['symbol'] for s in data['symbols'] if s['quoteAsset'] == 'USDT' and s['status'] == 'TRADING']
+        symbols = [s['symbol'] for s in data['symbols'] if s['quoteAsset'] == 'USDT' and s['contractType'] == 'PERPETUAL']
         return sorted(symbols)
     except Exception as e:
         st.error(f"Gagal mengambil daftar pair: {e}")
@@ -51,14 +42,14 @@ margin_mode = st.sidebar.radio("💼 Mode Margin", ["Cross", "Isolated"], index=
 start_analysis = st.sidebar.button("🚀 Mulai Analisa")
 refresh_data = st.sidebar.button("🔄 Refresh Manual")
 
-# Inisialisasi DataFrame untuk harga
+# Inisialisasi DataFrame
 if 'price_data' not in st.session_state:
     st.session_state.price_data = pd.DataFrame(columns=["timestamp", "open", "high", "low", "close"])
 
 # Ambil data historis
 @st.cache_data(ttl=60)
 def fetch_initial_data(symbol, interval, limit=200):
-    url = f"https://api.binance.com/api/v3/klines?symbol={symbol}&interval={interval}&limit={limit}"
+    url = f"https://fapi.binance.com/fapi/v1/klines?symbol={symbol}&interval={interval}&limit={limit}"
     try:
         response = requests.get(url)
         klines = response.json()
@@ -91,26 +82,32 @@ def handle_socket_message(msg):
         }
         latest_data.append(candle)
 
-def start_binance_socket():
-    # Inisialisasi koneksi WebSocket untuk Binance Futures
-    client = Client(API_KEY, API_SECRET)
-    bm = BinanceSocketManager(client)
-    conn_key = bm.start_kline_socket(selected_pair.lower(), timeframe, handle_socket_message)
-    bm.start()
+def start_binance_futures_socket():
+    def on_message(ws, message):
+        msg = json.loads(message)
+        handle_socket_message(msg)
 
-    while True:
-        time.sleep(1)  # Keep thread alive
+    def on_error(ws, error):
+        print(f"WebSocket error: {error}")
+
+    def on_close(ws, close_status_code, close_msg):
+        print("WebSocket closed")
+
+    symbol_lower = selected_pair.lower()
+    socket_url = f"wss://fstream.binance.com/ws/{symbol_lower}@kline_{timeframe}"
+    ws_app = WebSocketApp(socket_url, on_message=on_message, on_error=on_error, on_close=on_close)
+    ws_app.run_forever()
 
 if start_analysis and 'ws_thread' not in st.session_state:
     with st.spinner("⏳ Mengambil data historis..."):
         st.session_state.price_data = fetch_initial_data(selected_pair, timeframe)
 
-    ws_thread = threading.Thread(target=start_binance_socket, daemon=True)
+    ws_thread = threading.Thread(target=start_binance_futures_socket, daemon=True)
     ws_thread.start()
     st.session_state.ws_thread = ws_thread
     st.success("✅ Analisa dimulai, data real-time sedang berjalan...")
 
-# Menambahkan data terbaru dari latest_data ke session_state
+# Tambah data terbaru dari latest_data ke session_state
 if latest_data:
     new_rows = pd.DataFrame(latest_data)
     st.session_state.price_data = pd.concat([st.session_state.price_data, new_rows], ignore_index=True)
@@ -180,4 +177,4 @@ if len(st.session_state.price_data) >= 20:
         st.info("🔍 Belum ada sinyal valid")
 
 else:
-    st.info("📡 Klik tombol 'Mulai Analisa' untuk memulai streaming data dari Binance WebSocket")
+    st.info("📡 Klik tombol 'Mulai Analisa' untuk memulai streaming data dari Binance Futures WebSocket")
