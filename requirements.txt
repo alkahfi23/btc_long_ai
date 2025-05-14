@@ -12,5 +12,7 @@ joblib
 websocket-client
 binance-connector 
 binance-futures
+python-binance
+
 
 
