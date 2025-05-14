@@ -3,13 +3,12 @@ import pandas as pd
 import numpy as np
 import ta
 import plotly.graph_objects as go
-import websocket
-import json
-import threading
+from binance.websocket.spot.websocket_client import SpotWebsocketClient
+from binance.client import Client
 from datetime import datetime
 import requests
+import threading
 import time
-import contextlib
 
 st.set_page_config(page_title="AI Crypto Signal Analyzer", layout="wide")
 st.title("📊 AI Crypto Signal Analyzer (Real-Time Binance)")
@@ -65,39 +64,32 @@ def fetch_initial_data(symbol, interval, limit=200):
         st.error(f"Gagal mengambil data historis: {e}")
         return pd.DataFrame(columns=["timestamp", "open", "high", "low", "close"])
 
-# WebSocket handler
 latest_data = []
 
-def on_message(ws, message):
-    global latest_data
-    data = json.loads(message)
-    k = data['k']
-    new_candle = {
-        "timestamp": pd.to_datetime(k['t'], unit='ms'),
-        "open": float(k['o']),
-        "high": float(k['h']),
-        "low": float(k['l']),
-        "close": float(k['c'])
-    }
-    latest_data.append(new_candle)
+def handle_socket_message(msg):
+    if msg.get("k"):
+        k = msg["k"]
+        candle = {
+            "timestamp": pd.to_datetime(k['t'], unit='ms'),
+            "open": float(k['o']),
+            "high": float(k['h']),
+            "low": float(k['l']),
+            "close": float(k['c'])
+        }
+        latest_data.append(candle)
 
-def on_error(ws, error):
-    print(f"WebSocket error: {error}")
+def start_binance_socket():
+    ws = SpotWebsocketClient(on_message=handle_socket_message)
+    ws.kline(symbol=selected_pair.lower(), interval=timeframe)
 
-def on_close(ws, close_status_code, close_msg):
-    print("WebSocket closed")
-
-def run_ws():
-    stream = f"wss://stream.binance.com:9443/ws/{selected_pair.lower()}@kline_{timeframe}"
-    ws = websocket.WebSocketApp(stream, on_message=on_message, on_error=on_error, on_close=on_close)
-    with contextlib.suppress(Exception):
-        ws.run_forever()
+    while True:
+        time.sleep(1)  # Keep thread alive
 
 if start_analysis and 'ws_thread' not in st.session_state:
     with st.spinner("⏳ Mengambil data historis..."):
         st.session_state.price_data = fetch_initial_data(selected_pair, timeframe)
 
-    ws_thread = threading.Thread(target=run_ws, daemon=True)
+    ws_thread = threading.Thread(target=start_binance_socket, daemon=True)
     ws_thread.start()
     st.session_state.ws_thread = ws_thread
     st.success("✅ Analisa dimulai, data real-time sedang berjalan...")
