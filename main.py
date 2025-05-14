@@ -9,7 +9,6 @@ import threading
 from datetime import datetime
 import requests
 import time
-import streamlit.runtime.scriptrunner.script_run_context as script_run_context
 import contextlib
 
 st.set_page_config(page_title="AI Crypto Signal Analyzer", layout="wide")
