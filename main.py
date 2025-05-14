@@ -7,15 +7,17 @@ import plotly.graph_objects as go
 from datetime import datetime, timedelta
 
 st.set_page_config(page_title="AI BTC/ETH Signal Analyzer", layout="wide")
+st.title("📊 AI BTC/ETH Signal Analyzer")
 st.sidebar.title("🔧 Pengaturan Analisa")
 
-# Fungsi untuk mengambil daftar trading pair dari API Bybit
+# Fungsi untuk mengambil daftar trading pair dari API Bybit (v5)
 def get_trading_pairs():
-    url = "https://api.bybit.com/v2/public/symbols"
+    url = "https://api.bybit.com/v5/market/instruments"
+    params = {"category": "linear"}
     try:
-        res = requests.get(url, timeout=10)
+        res = requests.get(url, params=params, timeout=10)
         data = res.json()
-        pairs = [item['symbol'] for item in data['result'] if item['quoteCurrency'] == 'USDT']
+        pairs = [item['symbol'] for item in data['result']['list'] if item['symbol'].endswith('USDT')]
         return pairs
     except Exception as e:
         st.error(f"Error fetching trading pairs: {e}")
