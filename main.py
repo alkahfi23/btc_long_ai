@@ -9,6 +9,18 @@ from datetime import datetime
 import requests
 import threading
 import time
+from dotenv import load_dotenv
+import os
+
+# Muat file .env untuk mendapatkan API key dan Secret key secara aman
+load_dotenv()
+
+API_KEY = os.getenv('BINANCE_API_KEY')
+API_SECRET = os.getenv('BINANCE_API_SECRET')
+
+if not API_KEY or not API_SECRET:
+    st.error("API Key atau Secret Key belum disetting. Pastikan file .env sudah ada.")
+    st.stop()
 
 # Konfigurasi Streamlit
 st.set_page_config(page_title="AI Crypto Signal Analyzer", layout="wide")
@@ -81,7 +93,7 @@ def handle_socket_message(msg):
 
 def start_binance_socket():
     # Inisialisasi koneksi WebSocket untuk Binance Futures
-    client = Client(api_key='1a6IOutOrQAauWOz3r0RsZYspF4zujeM8QB9OBRb5tPB6wZ2GRaEF09EX1WjihlH', api_secret='3HpKjPR26l5Gy6cjOKpLqUCnEcidqpqfTwgN1pV6upzt6XKIbYYjRoGmV1pwfn9Q')
+    client = Client(API_KEY, API_SECRET)
     bm = BinanceSocketManager(client)
     conn_key = bm.start_kline_socket(selected_pair.lower(), timeframe, handle_socket_message)
     bm.start()
