@@ -8,6 +8,7 @@ import json
 import threading
 from datetime import datetime
 import requests
+import time
 
 st.set_page_config(page_title="AI Crypto Signal Analyzer", layout="wide")
 st.title("📊 AI Crypto Signal Analyzer (Real-Time Binance)")
@@ -43,7 +44,27 @@ placeholder = st.empty()
 # Inisialisasi DataFrame global
 price_data = pd.DataFrame(columns=["timestamp", "price"])
 
-# Websocket handler
+# Fungsi untuk ambil data historis awal
+@st.cache_data(ttl=60)
+def fetch_initial_data(symbol, interval, limit=200):
+    url = f"https://api.binance.com/api/v3/klines?symbol={symbol}&interval={interval}&limit={limit}"
+    try:
+        response = requests.get(url)
+        klines = response.json()
+        data = pd.DataFrame([
+            {
+                "timestamp": pd.to_datetime(k[0], unit="ms"),
+                "price": float(k[4])  # close price
+            }
+            for k in klines
+        ])
+        return data
+    except Exception as e:
+        st.error(f"Gagal mengambil data historis: {e}")
+        return pd.DataFrame(columns=["timestamp", "price"])
+
+# WebSocket handler
+
 def on_message(ws, message):
     global price_data
     data = json.loads(message)
@@ -109,6 +130,9 @@ def run_ws():
     ws.run_forever()
 
 if start_analysis:
+    with st.spinner("⏳ Mengambil data historis..."):
+        price_data = fetch_initial_data(selected_pair, timeframe)
+
     threading.Thread(target=run_ws, daemon=True).start()
     st.success("✅ Analisa dimulai, data real-time sedang berjalan...")
 else:
