@@ -10,7 +10,6 @@ from datetime import datetime
 import requests
 import time
 import contextlib
-from streamlit_autorefresh import st_autorefresh
 
 st.set_page_config(page_title="AI Crypto Signal Analyzer", layout="wide")
 st.title("📊 AI Crypto Signal Analyzer (Real-Time Binance)")
@@ -38,6 +37,7 @@ risk_pct = st.sidebar.slider("🎯 Risiko per Transaksi (%)", 0.1, 5.0, 1.0)
 leverage = st.sidebar.number_input("⚙️ Leverage", min_value=1, max_value=125, value=10)
 margin_mode = st.sidebar.radio("💼 Mode Margin", ["Cross", "Isolated"], index=0)
 start_analysis = st.sidebar.button("🚀 Mulai Analisa")
+refresh_data = st.sidebar.button("🔄 Refresh Manual")
 
 # Inisialisasi DataFrame
 if 'price_data' not in st.session_state:
@@ -157,6 +157,3 @@ if len(st.session_state.price_data) >= 20:
 
 else:
     st.info("📡 Klik tombol 'Mulai Analisa' untuk memulai streaming data dari Binance WebSocket")
-
-# Auto-refresh tiap 10 detik
-st_autorefresh(interval=10000, limit=None, key="refresh")
