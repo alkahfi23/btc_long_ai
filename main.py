@@ -12,7 +12,7 @@ st.sidebar.title("🔧 Pengaturan Analisa")
 
 # Fungsi untuk mengambil daftar trading pair dari API Bybit (v5)
 def get_trading_pairs():
-    url = "https://api.bybit.com/v5/market/instruments"
+    url = "https://api.bybit.com/v5/market/instruments-info"
     params = {"category": "linear"}
     try:
         res = requests.get(url, params=params, timeout=10)
