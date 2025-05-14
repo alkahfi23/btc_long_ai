@@ -16,9 +16,26 @@ def get_trading_pairs():
     params = {"category": "linear"}
     try:
         res = requests.get(url, params=params, timeout=10)
-        data = res.json()
-        pairs = [item['symbol'] for item in data['result']['list'] if item['symbol'].endswith('USDT')]
-        return pairs
+
+        if res.status_code != 200:
+            st.error(f"Gagal mendapatkan data dari Bybit (status {res.status_code})")
+            return []
+
+        try:
+            data = res.json()
+        except ValueError:
+            st.error("Respon dari API bukan format JSON.")
+            return []
+
+        if "result" in data and "list" in data["result"]:
+            pairs = [item['symbol'] for item in data['result']['list'] if item['symbol'].endswith('USDT')]
+            if not pairs:
+                st.warning("Tidak ada pair USDT ditemukan.")
+            return pairs
+        else:
+            st.error("Struktur data API tidak sesuai.")
+            return []
+
     except Exception as e:
         st.error(f"Error fetching trading pairs: {e}")
         return []
