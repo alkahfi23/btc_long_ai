@@ -9,6 +9,8 @@ import threading
 from datetime import datetime
 import requests
 import time
+import streamlit.runtime.scriptrunner.script_run_context as script_run_context
+import contextlib
 
 st.set_page_config(page_title="AI Crypto Signal Analyzer", layout="wide")
 st.title("📊 AI Crypto Signal Analyzer (Real-Time Binance)")
@@ -127,7 +129,8 @@ def on_close(ws, close_status_code, close_msg):
 def run_ws():
     stream = f"wss://stream.binance.com:9443/ws/{selected_pair.lower()}@kline_{timeframe}"
     ws = websocket.WebSocketApp(stream, on_message=on_message, on_error=on_error, on_close=on_close)
-    ws.run_forever()
+    with contextlib.suppress(Exception):
+        ws.run_forever()
 
 if start_analysis:
     with st.spinner("⏳ Mengambil data historis..."):
