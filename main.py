@@ -12,7 +12,7 @@ st.sidebar.title("🔧 Pengaturan Analisa")
 
 # Fungsi untuk mengambil daftar trading pair dari API Bybit (v5)
 def get_trading_pairs():
-    url = "https://api.bybit.com/v5/market/instruments-info"
+    url = "https://api.bybit.com/v5/market/instruments"
     params = {"category": "linear"}
     try:
         res = requests.get(url, params=params, timeout=10)
@@ -78,8 +78,9 @@ def get_kline_data(symbol, interval="60", limit=200):
     df["rsi"] = ta.momentum.RSIIndicator(df["close"]).rsi()
     df["ema_fast"] = ta.trend.EMAIndicator(df["close"], window=5).ema_indicator()
     df["ema_slow"] = ta.trend.EMAIndicator(df["close"], window=20).ema_indicator()
-    df["macd"] = ta.trend.MACD(df["close"]).macd()
-    df["macd_signal"] = ta.trend.MACD(df["close"]).macd_signal()
+    macd = ta.trend.MACD(df["close"])
+    df["macd"] = macd.macd()
+    df["macd_signal"] = macd.macd_signal()
     df["adx"] = ta.trend.ADXIndicator(df["high"], df["low"], df["close"]).adx()
     df["atr"] = ta.volatility.AverageTrueRange(df["high"], df["low"], df["close"]).average_true_range()
     stoch = ta.momentum.StochasticOscillator(df["high"], df["low"], df["close"])
@@ -105,20 +106,31 @@ def calculate_sl_tp(entry, atr, is_long=True, sl_multiplier=2, tp_multiplier=3):
 def get_valid_signal(df):
     df["signal"] = ""
     adx_threshold = 20
+    atr_buffer = df["atr"] * 1.5
 
     df.loc[
         (df["rsi"] < 30) &
-        (df["macd"] > 0) &
+        (df["rsi"] > 10) &
+        (df["macd"] > df["macd_signal"]) &
         (df["close"] > df["ema_fast"]) &
-        (df["adx"] > adx_threshold),
+        (df["ema_fast"] > df["ema_slow"]) &
+        (df["close"] < df["bb_lower"]) &
+        (df["adx"] > adx_threshold) &
+        ((df["ema_fast"] - df["ema_slow"]) > df["atr"] * 0.2) &
+        ((df["close"] - df["ema_fast"]) > df["atr"] * 0.2),
         "signal"
     ] = "LONG"
 
     df.loc[
         (df["rsi"] > 70) &
-        (df["macd"] < 0) &
+        (df["rsi"] < 90) &
+        (df["macd"] < df["macd_signal"]) &
         (df["close"] < df["ema_fast"]) &
-        (df["adx"] > adx_threshold),
+        (df["ema_fast"] < df["ema_slow"]) &
+        (df["close"] > df["bb_upper"]) &
+        (df["adx"] > adx_threshold) &
+        ((df["ema_slow"] - df["ema_fast"]) > df["atr"] * 0.2) &
+        ((df["ema_fast"] - df["close"]) > df["atr"] * 0.2),
         "signal"
     ] = "SHORT"
 
@@ -127,26 +139,53 @@ def get_valid_signal(df):
 # Tombol untuk memulai analisis
 if st.sidebar.button("🚀 Jalankan Analisa"):
     df = get_kline_data(symbol, interval=timeframe)
-    if not df.empty:
+    if df.empty:
+        st.error("❌ Gagal memuat data candle. Periksa koneksi Anda atau coba pair/timeframe lain.")
+    else:
         df = get_valid_signal(df)
-        last_signal = df["signal"].iloc[-1]
-        atr = df["atr"].iloc[-1]
-        entry = df["close"].iloc[-1]
 
-        if last_signal == "LONG":
-            sl, tp = calculate_sl_tp(entry, atr, is_long=True)
-        elif last_signal == "SHORT":
-            sl, tp = calculate_sl_tp(entry, atr, is_long=False)
-        else:
-            sl, tp = None, None
+        recent_signals = df[df["signal"].isin(["LONG", "SHORT"])].copy()
 
         st.subheader(f"📈 Sinyal Terbaru untuk {symbol} ({timeframe}m)")
-        st.write(f"**Sinyal:** {last_signal}")
-        st.write(f"**Harga Entry:** ${entry:.2f}")
-        if sl and tp:
+
+        if not recent_signals.empty:
+            last_row = recent_signals.iloc[-1]
+            last_signal = last_row["signal"]
+            entry = last_row["close"]
+            atr = last_row["atr"]
+
+            if last_signal == "LONG":
+                sl, tp = calculate_sl_tp(entry, atr, is_long=True)
+            else:
+                sl, tp = calculate_sl_tp(entry, atr, is_long=False)
+
+            st.write(f"**Sinyal:** {last_signal}")
+            st.write(f"**Harga Entry:** ${entry:.2f}")
             st.write(f"**Stop Loss:** ${sl:.2f}")
             st.write(f"**Take Profit:** ${tp:.2f}")
 
+            # Manajemen Risiko
+            risk_amount = modal * (risk_pct / 100)
+            position_size = (risk_amount * leverage) / abs(entry - sl)
+            position_value = position_size * entry
+
+            st.markdown("### 💼 Manajemen Risiko")
+            st.write(f"**Risiko Maksimal:** ${risk_amount:.2f}")
+            st.write(f"**Ukuran Posisi (leverage {leverage}x):** {position_size:.4f} {symbol}")
+            st.write(f"**Nilai Posisi:** ${position_value:.2f}")
+
+            # Estimasi Profit & Loss
+            potential_profit = abs(tp - entry) * position_size
+            potential_loss = abs(entry - sl) * position_size
+
+            st.markdown("### 📈 Estimasi Potensi Profit & Loss")
+            st.write(f"**Potensi Profit:** ${potential_profit:.2f}")
+            st.write(f"**Potensi Loss:** ${potential_loss:.2f}")
+
+        else:
+            st.info("Belum ada sinyal LONG/SHORT yang valid dalam data terbaru.")
+
+        # Visualisasi
         fig = go.Figure()
         fig.add_trace(go.Candlestick(
             x=df.index,
@@ -163,8 +202,8 @@ if st.sidebar.button("🚀 Jalankan Analisa"):
         # Visualisasi RSI
         rsi_fig = go.Figure()
         rsi_fig.add_trace(go.Scatter(x=df.index, y=df["rsi"], name="RSI", line=dict(color="purple")))
-        rsi_fig.add_hline(y=70, line=dict(color="red", dash="dash"))
-        rsi_fig.add_hline(y=30, line=dict(color="green", dash="dash"))
+        rsi_fig.add_shape(type="line", x0=df.index.min(), x1=df.index.max(), y0=70, y1=70, line=dict(color="red", dash="dash"))
+        rsi_fig.add_shape(type="line", x0=df.index.min(), x1=df.index.max(), y0=30, y1=30, line=dict(color="green", dash="dash"))
         rsi_fig.update_layout(title="RSI", height=300)
         st.plotly_chart(rsi_fig, use_container_width=True)
 
@@ -177,17 +216,4 @@ if st.sidebar.button("🚀 Jalankan Analisa"):
         macd_fig.update_layout(title="MACD", height=300)
         st.plotly_chart(macd_fig, use_container_width=True)
 
-        # Manajemen Risiko
-        if sl:
-            risk_amount = modal * (risk_pct / 100)
-            position_size = (risk_amount * leverage) / abs(entry - sl)
-            position_value = position_size * entry
-
-            st.markdown("### 💼 Manajemen Risiko")
-            st.write(f"**Risiko Maksimal:** ${risk_amount:.2f}")
-            st.write(f"**Ukuran Posisi (leverage {leverage}x):** {position_size:.4f} {symbol}")
-            st.write(f"**Nilai Posisi:** ${position_value:.2f}")
-
         st.session_state.analyzed = True
-    else:
-        st.warning("Data tidak tersedia atau gagal memuat.")
