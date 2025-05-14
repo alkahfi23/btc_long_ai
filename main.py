@@ -41,7 +41,7 @@ refresh_data = st.sidebar.button("🔄 Refresh Manual")
 
 # Inisialisasi DataFrame
 if 'price_data' not in st.session_state:
-    st.session_state.price_data = pd.DataFrame(columns=["timestamp", "price"])
+    st.session_state.price_data = pd.DataFrame(columns=["timestamp", "open", "high", "low", "close"])
 
 # Ambil data historis
 @st.cache_data(ttl=60)
@@ -53,14 +53,17 @@ def fetch_initial_data(symbol, interval, limit=200):
         data = pd.DataFrame([
             {
                 "timestamp": pd.to_datetime(k[0], unit="ms"),
-                "price": float(k[4])
+                "open": float(k[1]),
+                "high": float(k[2]),
+                "low": float(k[3]),
+                "close": float(k[4])
             }
             for k in klines
         ])
         return data
     except Exception as e:
         st.error(f"Gagal mengambil data historis: {e}")
-        return pd.DataFrame(columns=["timestamp", "price"])
+        return pd.DataFrame(columns=["timestamp", "open", "high", "low", "close"])
 
 # WebSocket handler
 latest_data = []
@@ -68,10 +71,15 @@ latest_data = []
 def on_message(ws, message):
     global latest_data
     data = json.loads(message)
-    price = float(data['k']['c'])
-    timestamp = pd.to_datetime(data['k']['t'], unit='ms')
-    latest_data.append({"timestamp": timestamp, "price": price})
-
+    k = data['k']
+    new_candle = {
+        "timestamp": pd.to_datetime(k['t'], unit='ms'),
+        "open": float(k['o']),
+        "high": float(k['h']),
+        "low": float(k['l']),
+        "close": float(k['c'])
+    }
+    latest_data.append(new_candle)
 
 def on_error(ws, error):
     print(f"WebSocket error: {error}")
@@ -106,23 +114,23 @@ if latest_data:
 if len(st.session_state.price_data) >= 20:
     df = st.session_state.price_data.copy()
     df.set_index("timestamp", inplace=True)
-    df["ema_fast"] = ta.trend.EMAIndicator(df["price"], window=5).ema_indicator()
-    df["ema_slow"] = ta.trend.EMAIndicator(df["price"], window=20).ema_indicator()
-    df["rsi"] = ta.momentum.RSIIndicator(df["price"]).rsi()
-    macd = ta.trend.MACD(df["price"])
+    df["ema_fast"] = ta.trend.EMAIndicator(df["close"], window=5).ema_indicator()
+    df["ema_slow"] = ta.trend.EMAIndicator(df["close"], window=20).ema_indicator()
+    df["rsi"] = ta.momentum.RSIIndicator(df["close"]).rsi()
+    macd = ta.trend.MACD(df["close"])
     df["macd"] = macd.macd()
     df["macd_signal"] = macd.macd_signal()
     df.dropna(inplace=True)
 
     signal = ""
-    entry_price = df["price"].iloc[-1]
-    atr = df["price"].rolling(window=14).std().iloc[-1] * 1.5
+    entry_price = df["close"].iloc[-1]
+    atr = df["close"].rolling(window=14).std().iloc[-1] * 1.5
     stop_loss = None
     take_profit = None
 
     if (
         df["rsi"].iloc[-1] < 30 and
-        df["price"].iloc[-1] > df["ema_fast"].iloc[-1] and
+        df["close"].iloc[-1] > df["ema_fast"].iloc[-1] and
         df["macd"].iloc[-1] > df["macd_signal"].iloc[-1]
     ):
         signal = "📈 LONG"
@@ -130,17 +138,25 @@ if len(st.session_state.price_data) >= 20:
         take_profit = entry_price + (2 * atr)
     elif (
         df["rsi"].iloc[-1] > 70 and
-        df["price"].iloc[-1] < df["ema_fast"].iloc[-1] and
+        df["close"].iloc[-1] < df["ema_fast"].iloc[-1] and
         df["macd"].iloc[-1] < df["macd_signal"].iloc[-1]
     ):
         signal = "📉 SHORT"
         stop_loss = entry_price + atr
         take_profit = entry_price - (2 * atr)
 
-    fig = go.Figure()
-    fig.add_trace(go.Scatter(x=df.index, y=df["price"], mode="lines", name="Price"))
-    fig.add_trace(go.Scatter(x=df.index, y=df["ema_fast"], mode="lines", name="EMA 5"))
-    fig.add_trace(go.Scatter(x=df.index, y=df["ema_slow"], mode="lines", name="EMA 20"))
+    fig = go.Figure(data=[
+        go.Candlestick(
+            x=df.index,
+            open=df["open"],
+            high=df["high"],
+            low=df["low"],
+            close=df["close"],
+            name="Candlestick"
+        ),
+        go.Scatter(x=df.index, y=df["ema_fast"], mode="lines", name="EMA 5"),
+        go.Scatter(x=df.index, y=df["ema_slow"], mode="lines", name="EMA 20")
+    ])
 
     if signal:
         fig.add_hline(y=entry_price, line=dict(color="blue", dash="dash"), annotation_text=f"Entry: {entry_price:.2f}", annotation_position="top left")
