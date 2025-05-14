@@ -11,4 +11,6 @@ keras
 joblib
 websocket-client
 binance-connector 
+binance-futures
+
 
