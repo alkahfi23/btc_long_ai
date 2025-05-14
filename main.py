@@ -1,8 +1,13 @@
 import streamlit as st
 import pandas as pd
+import numpy as np
 import requests
 import ta
 import plotly.graph_objects as go
+from keras.models import load_model, Sequential
+from keras.layers import LSTM, Dense
+from sklearn.preprocessing import MinMaxScaler
+import os
 from datetime import datetime, timedelta
 
 st.set_page_config(page_title="AI BTC/ETH Signal Analyzer", layout="wide")
@@ -12,7 +17,6 @@ st.sidebar.title("🔧 Pengaturan Analisa")
 modal = st.sidebar.number_input("💰 Modal Anda ($)", value=1000.0, step=100.0)
 risk_pct = st.sidebar.slider("🎯 Risiko per Transaksi (%)", min_value=0.1, max_value=5.0, value=1.0)
 interval = st.sidebar.selectbox("⏱️ Pilih Interval Waktu", options=["1", "5", "15", "30", "60", "240", "D"], index=4)
-signal_filter = st.sidebar.selectbox("🧳 Filter Sinyal", options=["SEMUA", "LONG", "SHORT", "WAIT"])
 leverage = st.sidebar.number_input("⚙️ Leverage", min_value=1, max_value=125, value=10)
 mode_strategi = st.sidebar.selectbox("📈 Mode Strategi", ["Adaptif", "Agresif", "Konservatif"])
 mode_data = st.sidebar.selectbox("🔄 Mode Data", ["Live", "Backtest"])
@@ -68,82 +72,50 @@ def get_kline_data(symbol, interval="60", limit=200, csv_df=None):
 
     return df
 
-def plot_chart(df, symbol, signal=None):
+# Fungsi untuk mendapatkan sinyal valid (berdasarkan indikator teknikal)
+def get_valid_signal(df):
+    df["signal"] = ""
+    
+    # Tentukan sinyal berdasarkan indikator teknikal
+    df.loc[
+        (df["rsi"] > 70) & (df["close"] > df["ema_fast"]) & (df["macd"] > 0), "signal"
+    ] = "SHORT"
+    
+    df.loc[
+        (df["rsi"] < 30) & (df["close"] < df["ema_fast"]) & (df["macd"] < 0), "signal"
+    ] = "LONG"
+
+    # Ambil sinyal yang valid
+    valid_signals = df[df["signal"] != ""]
+    return valid_signals
+
+# Chart dengan Entry, Take Profit, Stop Loss
+def plot_chart(df, entry, stop_loss, take_profit):
     fig = go.Figure()
-
-    # Candlestick chart
-    fig.add_trace(go.Candlestick(
-        x=df.index,
-        open=df['open'],
-        high=df['high'],
-        low=df['low'],
-        close=df['close'],
-        name="Candlesticks"
-    ))
-
-    # EMA Lines
-    fig.add_trace(go.Scatter(
-        x=df.index, y=df['ema_fast'], mode='lines', name="EMA 5", line=dict(color='blue', width=2)
-    ))
-    fig.add_trace(go.Scatter(
-        x=df.index, y=df['ema_slow'], mode='lines', name="EMA 20", line=dict(color='red', width=2)
-    ))
-
-    # RSI Indicator
-    fig.add_trace(go.Scatter(
-        x=df.index, y=df['rsi'], mode='lines', name="RSI", line=dict(color='purple', width=2)
-    ))
-
-    # MACD Indicator
-    fig.add_trace(go.Scatter(
-        x=df.index, y=df['macd'], mode='lines', name="MACD", line=dict(color='green', width=2)
-    ))
-
-    # Bollinger Bands
-    fig.add_trace(go.Scatter(
-        x=df.index, y=df['bb_upper'], mode='lines', name="Bollinger Upper", line=dict(color='orange', width=1, dash='dash')
-    ))
-    fig.add_trace(go.Scatter(
-        x=df.index, y=df['bb_lower'], mode='lines', name="Bollinger Lower", line=dict(color='orange', width=1, dash='dash')
-    ))
-
-    # Signals (if available)
-    if signal:
-        if signal == "LONG":
-            fig.add_trace(go.Scatter(
-                x=[df.index[-1]], y=[df['close'].iloc[-1]], mode="markers", name="LONG Signal", 
-                marker=dict(color="green", size=12, symbol="arrow-bar-up")
-            ))
-        elif signal == "SHORT":
-            fig.add_trace(go.Scatter(
-                x=[df.index[-1]], y=[df['close'].iloc[-1]], mode="markers", name="SHORT Signal", 
-                marker=dict(color="red", size=12, symbol="arrow-bar-down")
-            ))
-
-    fig.update_layout(
-        title=f"{symbol} Price Chart with Indicators",
-        xaxis_title="Date",
-        yaxis_title="Price (USDT)",
-        template="plotly_dark",
-        xaxis_rangeslider_visible=False
-    )
-
+    fig.add_trace(go.Scatter(x=df.index, y=df["close"], name="Harga Aktual"))
+    fig.add_trace(go.Scatter(x=[df.index[-1]], y=[entry], mode="markers", name="Entry", marker=dict(size=10, color="blue")))
+    fig.add_trace(go.Scatter(x=[df.index[-1]], y=[take_profit], mode="markers", name="Take Profit", marker=dict(size=10, color="green")))
+    fig.add_trace(go.Scatter(x=[df.index[-1]], y=[stop_loss], mode="markers", name="Stop Loss", marker=dict(size=10, color="red")))
+    fig.update_layout(title="📈 Chart Harga, Entry, TP, SL", xaxis_title="Waktu", yaxis_title="Harga USD")
     st.plotly_chart(fig, use_container_width=True)
 
-# Main code
-df = get_kline_data(symbol, interval=interval, csv_df=df_csv)
-signal_valid = get_valid_signal(df)
+# Menampilkan sinyal untuk BTC dan ETH tanpa filter
+def display_signals(symbol):
+    df = get_kline_data(symbol)
+    if not df.empty:
+        valid_signals = get_valid_signal(df)
+        if not valid_signals.empty:
+            for idx, row in valid_signals.iterrows():
+                entry = row["close"]
+                stop_loss = entry * 0.98 if row["signal"] == "LONG" else entry * 1.02
+                take_profit = entry * 1.03 if row["signal"] == "LONG" else entry * 0.97
+                st.write(f"**{symbol}** - Signal {row['signal']} at {entry:.2f}")
+                plot_chart(df, entry, stop_loss, take_profit)
+        else:
+            st.write(f"Tidak ada sinyal valid untuk {symbol}")
+    else:
+        st.write(f"Gagal mengambil data untuk {symbol}")
 
-if signal_valid == "LONG":
-    entry_price = df['close'].iloc[-1]
-    take_profit, stop_loss = calculate_take_profit_and_stop_loss(entry_price, trend="LONG")
-    st.write(f"🚀 **Sinyal LONG Valid**: Entry pada ${entry_price:.2f}, Take Profit pada ${take_profit:.2f}, Stop Loss pada ${stop_loss:.2f}")
-elif signal_valid == "SHORT":
-    entry_price = df['close'].iloc[-1]
-    take_profit, stop_loss = calculate_take_profit_and_stop_loss(entry_price, trend="SHORT")
-    st.write(f"⚠️ **Sinyal SHORT Valid**: Entry pada ${entry_price:.2f}, Take Profit pada ${take_profit:.2f}, Stop Loss pada ${stop_loss:.2f}")
-else:
-    st.write("❗ Tidak ada sinyal valid saat ini. Tunggu beberapa saat...")
-
-# Plot the chart with the signal
-plot_chart(df, symbol, signal=signal_valid)
+# Menampilkan sinyal untuk BTC dan ETH
+display_signals("BTC")
+display_signals("ETH")
