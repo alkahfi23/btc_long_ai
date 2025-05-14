@@ -81,6 +81,9 @@ def handle_socket_message(msg):
             "close": float(k['c'])
         }
         latest_data.append(candle)
+        # Update harga real-time di sidebar
+        st.session_state.last_price = float(k['c'])
+
 
 def start_binance_futures_socket():
     def on_message(ws, message):
@@ -114,6 +117,11 @@ if latest_data:
     st.session_state.price_data.drop_duplicates(subset="timestamp", keep="last", inplace=True)
     st.session_state.price_data = st.session_state.price_data.tail(200)
     latest_data.clear()
+
+# Harga terakhir real-time (jika tersedia)
+last_price = st.session_state.get("last_price", None)
+if last_price:
+    st.metric(label="📈 Harga Terakhir (Real-Time)", value=f"{last_price:.2f} USDT")
 
 # Hitung indikator dan tampilkan chart
 if len(st.session_state.price_data) >= 20:
