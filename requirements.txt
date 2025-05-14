@@ -10,4 +10,5 @@ statsmodels
 keras
 joblib
 websocket-client
+binance-connector 
 
