@@ -9,12 +9,17 @@ from datetime import datetime, timedelta
 st.set_page_config(page_title="AI BTC/ETH Signal Analyzer", layout="wide")
 st.sidebar.title("🔧 Pengaturan Analisa")
 
-# Sidebar inputs
+# Sidebar inputs untuk pengaturan analisis
 modal = st.sidebar.number_input("💰 Modal Anda ($)", value=1000.0, step=100.0)
 risk_pct = st.sidebar.slider("🎯 Risiko per Transaksi (%)", min_value=0.1, max_value=5.0, value=1.0)
 leverage = st.sidebar.number_input("⚙️ Leverage", min_value=1, max_value=125, value=10)
 symbol = st.sidebar.selectbox("💱 Simbol", options=["BTC", "ETH"], index=0)
 timeframe = st.sidebar.selectbox("⏱️ Pilih Timeframe Trading", options=["1", "5", "15", "30", "60", "240", "D"], index=4)
+
+if 'analyzed' not in st.session_state:
+    st.session_state.analyzed = False
+if 'results' not in st.session_state:
+    st.session_state.results = []
 
 @st.cache_data(ttl=300)
 def get_kline_data(symbol, interval="60", limit=200):
@@ -23,8 +28,6 @@ def get_kline_data(symbol, interval="60", limit=200):
     try:
         res = requests.get(url, params=params, timeout=10)
         data = res.json()
-        if "result" not in data or "list" not in data["result"]:
-            return pd.DataFrame()
         df = pd.DataFrame(data["result"]["list"])
         df.columns = ["timestamp", "open", "high", "low", "close", "volume", "turnover"]
         numeric_cols = ["open", "high", "low", "close", "volume", "turnover"]
@@ -50,19 +53,34 @@ def get_kline_data(symbol, interval="60", limit=200):
 
     return df
 
+# Fungsi untuk mendapatkan sinyal valid
 def get_valid_signal(df):
     df["signal"] = ""
+    adx_threshold = 20  # ADX di atas 20 = ada tren yang cukup kuat
+
+    # LONG signal
     df.loc[
-        (df["rsi"] < 30) & (df["close"] > df["ema_fast"]) & (df["macd"] > 0),
+        (df["rsi"] < 30) & 
+        (df["macd"] > 0) & 
+        (df["close"] > df["ema_fast"]) &
+        (df["adx"] > adx_threshold), 
         "signal"
     ] = "LONG"
+
+    # SHORT signal
     df.loc[
-        (df["rsi"] > 70) & (df["close"] < df["ema_fast"]) & (df["macd"] < 0),
+        (df["rsi"] > 70) & 
+        (df["macd"] < 0) & 
+        (df["close"] < df["ema_fast"]) &
+        (df["adx"] > adx_threshold), 
         "signal"
     ] = "SHORT"
+
+    # Ambil sinyal yang valid
     valid_signals = df[df["signal"] != ""]
     return valid_signals
 
+# Chart dengan Entry, Take Profit, Stop Loss
 def plot_chart(df, entry, stop_loss, take_profit):
     fig = go.Figure()
     fig.add_trace(go.Scatter(x=df.index, y=df["close"], name="Harga Aktual"))
@@ -72,104 +90,50 @@ def plot_chart(df, entry, stop_loss, take_profit):
     fig.update_layout(title="📈 Chart Harga, Entry, TP, SL", xaxis_title="Waktu", yaxis_title="Harga USD")
     st.plotly_chart(fig, use_container_width=True)
 
+# Menampilkan sinyal untuk BTC dan ETH
 def display_signals(symbol, timeframe):
-    with st.spinner(f"🔍 Mengambil data dan menganalisa sinyal untuk {symbol}..."):
-        df = get_kline_data(symbol, interval=timeframe)
-        if not df.empty:
-            valid_signals = get_valid_signal(df)
-            if not valid_signals.empty:
-                for idx, row in valid_signals.tail(3).iterrows():
-                    entry = row["close"]
-                    sl_pct = 0.02
-                    tp_pct = 0.03
-
-                    stop_loss = entry * (1 - sl_pct) if row["signal"] == "LONG" else entry * (1 + sl_pct)
-                    take_profit = entry * (1 + tp_pct) if row["signal"] == "LONG" else entry * (1 - tp_pct)
-
-                    stop_range = abs(entry - stop_loss)
-                    risk_amount = modal * (risk_pct / 100)
-                    position_size = (risk_amount / stop_range) * leverage
-
-                    potential_profit = abs(take_profit - entry) * position_size
-                    potential_loss = abs(entry - stop_loss) * position_size
-
-                    st.markdown(f"""
-                        ### 📍 {symbol} - Sinyal **{row['signal']}**
-                        ⏱️ Waktu: `{idx.strftime('%Y-%m-%d %H:%M')}`  
-                        💵 Entry: **${entry:.2f}**  
-                        🛑 Stop Loss: **${stop_loss:.2f}**  
-                        🎯 Take Profit: **${take_profit:.2f}**  
-                        📏 Ukuran Posisi: **{position_size:.4f} USDT**  
-                        ✅ Potensi Profit: **${potential_profit:.2f}**  
-                        ❌ Potensi Rugi: **${potential_loss:.2f}**
-                    """)
-                    plot_chart(df, entry, stop_loss, take_profit)
-            else:
-                st.info(f"Tidak ada sinyal valid untuk {symbol}")
+    df = get_kline_data(symbol, interval=timeframe)
+    if not df.empty:
+        valid_signals = get_valid_signal(df)
+        if not valid_signals.empty:
+            for idx, row in valid_signals.iterrows():
+                entry = row["close"]
+                stop_loss = entry * 0.98 if row["signal"] == "LONG" else entry * 1.02
+                take_profit = entry * 1.03 if row["signal"] == "LONG" else entry * 0.97
+                st.write(f"**{symbol}** - Signal {row['signal']} at {entry:.2f}")
+                plot_chart(df, entry, stop_loss, take_profit)
         else:
-            st.warning(f"Gagal mengambil data untuk {symbol}")
+            st.write(f"Tidak ada sinyal valid untuk {symbol}")
+    else:
+        st.write(f"Gagal mengambil data untuk {symbol}")
 
-# Simulasi Pertumbuhan Portofolio
-def simulate_portfolio_growth(df, signals, initial_balance, leverage, risk_pct):
-    balance = initial_balance
-    equity_curve = []
-    timestamps = []
-
-    for idx, row in signals.iterrows():
-        entry_price = row["close"]
-        direction = row["signal"]
-        stop_pct = 0.02
-        tp_pct = 0.03
-
-        sl_price = entry_price * (1 - stop_pct) if direction == "LONG" else entry_price * (1 + stop_pct)
-        tp_price = entry_price * (1 + tp_pct) if direction == "LONG" else entry_price * (1 - tp_pct)
-        
-        future_data = df[df.index > idx]
-        result = "HOLD"
-
-        for future_idx, future_row in future_data.iterrows():
-            high = future_row["high"]
-            low = future_row["low"]
-            if direction == "LONG":
-                if low <= sl_price:
-                    result = "SL"
-                    exit_price = sl_price
-                    break
-                elif high >= tp_price:
-                    result = "TP"
-                    exit_price = tp_price
-                    break
-            else:  # SHORT
-                if high >= sl_price:
-                    result = "SL"
-                    exit_price = sl_price
-                    break
-                elif low <= tp_price:
-                    result = "TP"
-                    exit_price = tp_price
-                    break
-
-        risk_amount = balance * (risk_pct / 100)
-        stop_range = abs(entry_price - sl_price)
-        position_size = (risk_amount / stop_range) * leverage
-
-        if result == "TP":
-            pnl = (abs(tp_price - entry_price)) * position_size
-        elif result == "SL":
-            pnl = -(abs(entry_price - sl_price)) * position_size
-        else:
-            pnl = 0
-
-        balance += pnl
-        equity_curve.append(balance)
-        timestamps.append(future_idx if result != "HOLD" else df.index[-1])
-
-    return pd.DataFrame({"Waktu": timestamps, "Saldo": equity_curve})
-
-# Tombol analisa sinyal
-if st.sidebar.button("🚀 Mulai Analisis Sinyal", use_container_width=True):
+# Button Analisis
+if st.sidebar.button("🚀 Mulai Analisis Sinyal"):
+    # Menampilkan sinyal untuk BTC dan ETH tanpa filter
     display_signals("BTC", timeframe)
     display_signals("ETH", timeframe)
+
+# Simulasi Pertumbuhan Portofolio
+def simulate_portfolio_growth(df, signals, modal, leverage, risk_pct):
+    # Saldo awal
+    balance = modal
+    portfolio_value = [balance]
+    
+    # Hitung ukuran posisi berdasarkan modal dan leverage
+    for idx, row in signals.iterrows():
+        entry = row["close"]
+        size = (balance * risk_pct / 100) / (entry * 0.02)  # Ukuran posisi berdasarkan SL 2%
+
+        # Simulasi perubahan portofolio
+        if row["signal"] == "LONG":
+            balance += size * (df.loc[idx, "close"] - entry) * leverage
+        elif row["signal"] == "SHORT":
+            balance += size * (entry - df.loc[idx, "close"]) * leverage
+
+        portfolio_value.append(balance)
+
+    # Mengembalikan hasil simulasi
+    return pd.DataFrame({"Waktu": df.index[:len(portfolio_value)], "Saldo": portfolio_value})
 
 # Tombol simulasi portofolio
 if st.sidebar.button("📊 Simulasikan Pertumbuhan Portofolio", use_container_width=True):
