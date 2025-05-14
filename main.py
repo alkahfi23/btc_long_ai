@@ -129,95 +129,131 @@ def predict_lstm(df, model):
     pred_price = scaler.inverse_transform(pred)[0][0]
     return pred_price
 
-def plot_chart(df, signal, tp=None, sl=None):
+def plot_chart(df, signal, tp, sl):
     fig = go.Figure()
-    fig.add_trace(go.Candlestick(x=df.index,
-                                 open=df['open'],
-                                 high=df['high'],
-                                 low=df['low'],
-                                 close=df['close'],
-                                 name='Candlestick'))
-    fig.add_trace(go.Scatter(x=df.index, y=df['ema_fast'], line=dict(color='blue', width=1), name='EMA 5'))
-    fig.add_trace(go.Scatter(x=df.index, y=df['ema_slow'], line=dict(color='orange', width=1), name='EMA 20'))
 
-    if tp:
-        fig.add_shape(type="line",
-                      x0=df.index[0], x1=df.index[-1],
-                      y0=tp, y1=tp,
-                      line=dict(color="green", dash="dash"),
-                      name="TP")
-        fig.add_annotation(x=df.index[-1], y=tp, text="TP", showarrow=False, yshift=10, font=dict(color="green"))
+    fig.add_trace(go.Candlestick(
+        x=df.index,
+        open=df['open'],
+        high=df['high'],
+        low=df['low'],
+        close=df['close'],
+        name='Candlesticks'
+    ))
 
-    if sl:
-        fig.add_shape(type="line",
-                      x0=df.index[0], x1=df.index[-1],
-                      y0=sl, y1=sl,
-                      line=dict(color="red", dash="dash"),
-                      name="SL")
-        fig.add_annotation(x=df.index[-1], y=sl, text="SL", showarrow=False, yshift=-10, font=dict(color="red"))
+    fig.add_trace(go.Scatter(
+        x=df.index, 
+        y=df['ema_fast'], 
+        mode='lines', 
+        name='EMA Fast', 
+        line=dict(color='orange')
+    ))
 
-    fig.update_layout(title=f"Sinyal: {signal}", xaxis_title='Waktu', yaxis_title='Harga')
+    fig.add_trace(go.Scatter(
+        x=df.index, 
+        y=df['ema_slow'], 
+        mode='lines', 
+        name='EMA Slow', 
+        line=dict(color='blue')
+    ))
+
+    if signal == "LONG":
+        fig.add_trace(go.Scatter(
+            x=[df.index[-1]], 
+            y=[df['close'].iloc[-1]], 
+            mode='markers', 
+            marker=dict(color='green', size=12),
+            name="Sinyal Long"
+        ))
+
+    elif signal == "SHORT":
+        fig.add_trace(go.Scatter(
+            x=[df.index[-1]], 
+            y=[df['close'].iloc[-1]], 
+            mode='markers', 
+            marker=dict(color='red', size=12),
+            name="Sinyal Short"
+        ))
+
+    if tp is not None:
+        fig.add_trace(go.Scatter(
+            x=[df.index[-1]], 
+            y=[tp], 
+            mode='markers', 
+            marker=dict(color='yellow', size=10),
+            name="Take Profit"
+        ))
+
+    if sl is not None:
+        fig.add_trace(go.Scatter(
+            x=[df.index[-1]], 
+            y=[sl], 
+            mode='markers', 
+            marker=dict(color='blue', size=10),
+            name="Stop Loss"
+        ))
+
+    fig.update_layout(
+        title="Chart BTC/ETH",
+        xaxis_title="Waktu",
+        yaxis_title="Harga",
+        xaxis_rangeslider_visible=False
+    )
+
     return fig
 
-def detect_signal(df):
-    last = df.iloc[-1]
-    regime = detect_market_regime(df)
-    entry = last["close"]
-    model = load_lstm_model()
-    lstm_pred = predict_lstm(df, model) if model else entry
-
-    if regime in ["UPTREND", "DOWNTREND"]:
-        signal = detect_trend_signal(df, last, entry, lstm_pred)
-    elif regime == "SIDEWAYS":
-        signal = detect_sideways_signal(df, last, entry, lstm_pred)
+if st.sidebar.button("🚀 Latih Ulang Model LSTM (dari CSV)"):
+    if df_csv is not None:
+        build_and_train_lstm(df_csv)
     else:
-        signal = "WAIT", None, None, lstm_pred > entry
+        st.warning("Mohon upload file CSV terlebih dahulu.")
 
-    return signal, entry, lstm_pred
+if st.session_state.analyzed:
+    st.title("📊 Analisis Sinyal Trading BTC/ETH")
+    symbol = "BTCUSDT"  # Simpan simbol yang digunakan
+    df = get_kline_data(symbol, interval=interval, csv_df=df_csv)
 
-for symbol in ["BTCUSDT", "ETHUSDT"]:
-    df = get_kline_data(symbol, interval=interval, csv_df=df_csv if mode_data == "Backtest" else None)
-    if not df.empty:
-        signal, entry, lstm_pred = detect_signal(df)
-        if signal_filter == "SEMUA" or signal == signal_filter:
-                        st.subheader(f"Sinyal untuk {symbol}")
-            st.write(f"Regim Pasar: {detect_market_regime(df)}")
-            st.write(f"Prediksi LSTM: {lstm_pred:.2f}")
-            
-            # Menampilkan sinyal
-            if signal == "LONG":
-                st.write("📈 Sinyal: LONG")
-            elif signal == "SHORT":
-                st.write("📉 Sinyal: SHORT")
-            elif signal == "WAIT":
-                st.write("⏸️ Sinyal: WAIT")
-            else:
-                st.write("❓ Sinyal: Tidak Terdefinisi")
+    model = load_lstm_model()
+    if model:
+        lstm_pred = predict_lstm(df, model)
 
-            # Menghitung TP dan SL
-            tp = None
-            sl = None
-            if signal == "LONG":
-                tp = entry + (entry * 0.02)  # Take Profit 2% lebih tinggi dari entry
-                sl = entry - (entry * 0.01)  # Stop Loss 1% lebih rendah dari entry
-            elif signal == "SHORT":
-                tp = entry - (entry * 0.02)  # Take Profit 2% lebih rendah dari entry
-                sl = entry + (entry * 0.01)  # Stop Loss 1% lebih tinggi dari entry
+    signal = "LONG"  # Ini contoh, bisa disesuaikan dengan sinyal yang sebenarnya
+    entry = df['close'].iloc[-1]
 
-            # Visualisasi chart
-            fig = plot_chart(df, signal, tp, sl)
-            st.plotly_chart(fig)
+    st.subheader(f"Sinyal untuk {symbol}")
+    st.write(f"Regim Pasar: {detect_market_regime(df)}")
+    st.write(f"Prediksi LSTM: {lstm_pred:.2f}")
 
-            # Menampilkan informasi posisi
-            qty = calculate_position_size(entry, sl, modal, risk_pct, leverage)
-            st.write(f"🧮 Ukuran Posisi: {qty} {symbol.split('USDT')[0]}")
-            st.write(f"📉 Entry Price: {entry:.2f} USD")
-            st.write(f"🎯 Take Profit: {tp:.2f} USD")
-            st.write(f"🚨 Stop Loss: {sl:.2f} USD")
-            st.write(f"💵 Modal: ${modal}")
+    # Menampilkan sinyal
+    if signal == "LONG":
+        st.write("📈 Sinyal: LONG")
+    elif signal == "SHORT":
+        st.write("📉 Sinyal: SHORT")
+    elif signal == "WAIT":
+        st.write("⏸️ Sinyal: WAIT")
+    else:
+        st.write("❓ Sinyal: Tidak Terdefinisi")
 
-        st.session_state.analyzed = True
+    # Menghitung TP dan SL
+    tp = None
+    sl = None
+    if signal == "LONG":
+        tp = entry + (entry * 0.02)  # Take Profit 2% lebih tinggi dari entry
+        sl = entry - (entry * 0.01)  # Stop Loss 1% lebih rendah dari entry
+    elif signal == "SHORT":
+        tp = entry - (entry * 0.02)  # Take Profit 2% lebih rendah dari entry
+        sl = entry + (entry * 0.01)  # Stop Loss 1% lebih tinggi dari entry
 
-else:
-    st.warning("Data tidak tersedia untuk analisis. Silakan pilih data atau upload file CSV untuk backtesting.")
+    # Visualisasi chart
+    fig = plot_chart(df, signal, tp, sl)
+    st.plotly_chart(fig)
 
+    # Menampilkan informasi posisi
+    qty = calculate_position_size(entry, sl, modal, risk_pct, leverage)
+    st.write(f"🧮 Ukuran Posisi: {qty} {symbol.split('USDT')[0]}")
+    st.write(f"📉 Entry Price: {entry:.2f} USD")
+    st.write(f"🎯 Take Profit: {tp:.2f} USD")
+    st.write(f"🚨 Stop Loss: {sl:.2f} USD")
+    st.write(f"💵 Modal: ${modal}")
+
+    st.session_state.analyzed = True
