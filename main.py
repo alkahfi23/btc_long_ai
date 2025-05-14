@@ -18,6 +18,16 @@ interval = st.sidebar.selectbox("⏱️ Pilih Interval Waktu", options=["1", "5"
 signal_filter = st.sidebar.selectbox("🧳 Filter Sinyal", options=["SEMUA", "LONG", "SHORT", "WAIT"])
 leverage = st.sidebar.number_input("⚙️ Leverage", min_value=1, max_value=125, value=10)
 mode_strategi = st.sidebar.selectbox("📈 Mode Strategi", ["Adaptif", "Agresif", "Konservatif"])
+mode_data = st.sidebar.selectbox("🔄 Mode Data", ["Live", "Backtest"])
+
+uploaded_file = None
+df_csv = None
+if mode_data == "Backtest":
+    uploaded_file = st.sidebar.file_uploader("📂 Upload CSV Harga BTC/ETH", type=["csv"])
+    if uploaded_file:
+        df_csv = pd.read_csv(uploaded_file, parse_dates=["timestamp"])
+        df_csv.set_index("timestamp", inplace=True)
+        df_csv.sort_index(inplace=True)
 
 if 'analyzed' not in st.session_state:
     st.session_state.analyzed = False
@@ -25,37 +35,40 @@ if 'results' not in st.session_state:
     st.session_state.results = []
 
 @st.cache_data(ttl=300)
-def get_kline_data(symbol, interval="60", limit=200):
-    url = "https://api.bybit.com/v5/market/kline"
-    params = {"category": "linear", "symbol": symbol, "interval": interval, "limit": limit}
-    try:
-        res = requests.get(url, params=params, timeout=10)
-        data = res.json()
-        df = pd.DataFrame(data["result"]["list"])
-        df.columns = ["timestamp", "open", "high", "low", "close", "volume", "turnover"]
-        numeric_cols = ["open", "high", "low", "close", "volume", "turnover"]
-        df[numeric_cols] = df[numeric_cols].astype(float)
-        df["timestamp"] = pd.to_datetime(df["timestamp"].astype(int), unit="ms")
-        df.set_index("timestamp", inplace=True)
-        df.sort_index(inplace=True)
+def get_kline_data(symbol, interval="60", limit=200, csv_df=None):
+    if csv_df is not None:
+        df = csv_df.copy()
+    else:
+        url = "https://api.bybit.com/v5/market/kline"
+        params = {"category": "linear", "symbol": symbol, "interval": interval, "limit": limit}
+        try:
+            res = requests.get(url, params=params, timeout=10)
+            data = res.json()
+            df = pd.DataFrame(data["result"]["list"])
+            df.columns = ["timestamp", "open", "high", "low", "close", "volume", "turnover"]
+            numeric_cols = ["open", "high", "low", "close", "volume", "turnover"]
+            df[numeric_cols] = df[numeric_cols].astype(float)
+            df["timestamp"] = pd.to_datetime(df["timestamp"].astype(int), unit="ms")
+            df.set_index("timestamp", inplace=True)
+        except Exception as e:
+            st.error(f"Error fetching {symbol}: {e}")
+            return pd.DataFrame()
 
-        df["rsi"] = ta.momentum.RSIIndicator(df["close"]).rsi()
-        df["ema_fast"] = ta.trend.EMAIndicator(df["close"], window=5).ema_indicator()
-        df["ema_slow"] = ta.trend.EMAIndicator(df["close"], window=20).ema_indicator()
-        df["macd"] = ta.trend.MACD(df["close"]).macd()
-        df["adx"] = ta.trend.ADXIndicator(df["high"], df["low"], df["close"]).adx()
-        df["atr"] = ta.volatility.AverageTrueRange(df["high"], df["low"], df["close"]).average_true_range()
-        stoch = ta.momentum.StochasticOscillator(df["high"], df["low"], df["close"])
-        df["stoch_k"] = stoch.stoch()
-        df["stoch_d"] = stoch.stoch_signal()
-        bb = ta.volatility.BollingerBands(df["close"])
-        df["bb_upper"] = bb.bollinger_hband()
-        df["bb_lower"] = bb.bollinger_lband()
+    df.sort_index(inplace=True)
+    df["rsi"] = ta.momentum.RSIIndicator(df["close"]).rsi()
+    df["ema_fast"] = ta.trend.EMAIndicator(df["close"], window=5).ema_indicator()
+    df["ema_slow"] = ta.trend.EMAIndicator(df["close"], window=20).ema_indicator()
+    df["macd"] = ta.trend.MACD(df["close"]).macd()
+    df["adx"] = ta.trend.ADXIndicator(df["high"], df["low"], df["close"]).adx()
+    df["atr"] = ta.volatility.AverageTrueRange(df["high"], df["low"], df["close"]).average_true_range()
+    stoch = ta.momentum.StochasticOscillator(df["high"], df["low"], df["close"])
+    df["stoch_k"] = stoch.stoch()
+    df["stoch_d"] = stoch.stoch_signal()
+    bb = ta.volatility.BollingerBands(df["close"])
+    df["bb_upper"] = bb.bollinger_hband()
+    df["bb_lower"] = bb.bollinger_lband()
 
-        return df
-    except Exception as e:
-        st.error(f"Error fetching {symbol}: {e}")
-        return pd.DataFrame()
+    return df
 
 def detect_market_regime(df):
     adx = df["adx"]
@@ -166,15 +179,29 @@ def plot_chart(df, signal, tp=None, sl=None):
                                  name='Candlestick'))
     fig.add_trace(go.Scatter(x=df.index, y=df['ema_fast'], line=dict(color='blue', width=1), name='EMA 5'))
     fig.add_trace(go.Scatter(x=df.index, y=df['ema_slow'], line=dict(color='orange', width=1), name='EMA 20'))
+
     if tp:
-        fig.add_hline(y=tp, line=dict(color="green", dash="dash"), annotation_text="TP")
+        fig.add_shape(type="line",
+                      x0=df.index[0], x1=df.index[-1],
+                      y0=tp, y1=tp,
+                      line=dict(color="green", dash="dash"),
+                      name="TP")
+        fig.add_annotation(x=df.index[-1], y=tp, text="TP", showarrow=False, yshift=10, font=dict(color="green"))
+
     if sl:
-        fig.add_hline(y=sl, line=dict(color="red", dash="dash"), annotation_text="SL")
+        fig.add_shape(type="line",
+                      x0=df.index[0], x1=df.index[-1],
+                      y0=sl, y1=sl,
+                      line=dict(color="red", dash="dash"),
+                      name="SL")
+        fig.add_annotation(x=df.index[-1], y=sl, text="SL", showarrow=False, yshift=-10, font=dict(color="red"))
+
     fig.update_layout(title=f"Sinyal: {signal}", xaxis_title='Waktu', yaxis_title='Harga')
     return fig
 
+
 for symbol in ["BTCUSDT", "ETHUSDT"]:
-    df = get_kline_data(symbol, interval=interval)
+    df = get_kline_data(symbol, interval=interval, csv_df=df_csv if mode_data == "Backtest" else None)
     if not df.empty:
         signal, entry, tp, sl, lstm_up = detect_signal(df)
         if signal_filter == "SEMUA" or signal == signal_filter:
