@@ -3,19 +3,19 @@ import pandas as pd
 import numpy as np
 import ta
 import plotly.graph_objects as go
-from binance.client import Client
-from binance.futures import FuturesWebsocketClient  # Gunakan FuturesWebsocketClient
+from binance.client import Client  # Import client untuk autentikasi
+from binance.websockets import BinanceSocketManager  # WebSocket Manager untuk futures
 from datetime import datetime
 import requests
 import threading
 import time
 
-# Pengaturan Streamlit dan input
+# Konfigurasi Streamlit
 st.set_page_config(page_title="AI Crypto Signal Analyzer", layout="wide")
 st.title("📊 AI Crypto Signal Analyzer (Real-Time Binance Futures)")
 st.sidebar.title("🔧 Pengaturan Analisa")
 
-# Ambil semua symbol USDT dari Binance
+# Fungsi untuk mengambil semua pair USDT dari Binance
 @st.cache_data(ttl=600)
 def get_binance_usdt_pairs():
     url = "https://api.binance.com/api/v3/exchangeInfo"
@@ -39,7 +39,7 @@ margin_mode = st.sidebar.radio("💼 Mode Margin", ["Cross", "Isolated"], index=
 start_analysis = st.sidebar.button("🚀 Mulai Analisa")
 refresh_data = st.sidebar.button("🔄 Refresh Manual")
 
-# Inisialisasi DataFrame
+# Inisialisasi DataFrame untuk harga
 if 'price_data' not in st.session_state:
     st.session_state.price_data = pd.DataFrame(columns=["timestamp", "open", "high", "low", "close"])
 
@@ -80,8 +80,11 @@ def handle_socket_message(msg):
         latest_data.append(candle)
 
 def start_binance_socket():
-    ws = FuturesWebsocketClient(on_message=handle_socket_message)  # Menggunakan FuturesWebsocketClient
-    ws.kline(symbol=selected_pair.lower(), interval=timeframe)
+    # Inisialisasi koneksi WebSocket untuk Binance Futures
+    client = Client(api_key='1a6IOutOrQAauWOz3r0RsZYspF4zujeM8QB9OBRb5tPB6wZ2GRaEF09EX1WjihlH', api_secret='3HpKjPR26l5Gy6cjOKpLqUCnEcidqpqfTwgN1pV6upzt6XKIbYYjRoGmV1pwfn9Q')
+    bm = BinanceSocketManager(client)
+    conn_key = bm.start_kline_socket(selected_pair.lower(), timeframe, handle_socket_message)
+    bm.start()
 
     while True:
         time.sleep(1)  # Keep thread alive
@@ -95,7 +98,7 @@ if start_analysis and 'ws_thread' not in st.session_state:
     st.session_state.ws_thread = ws_thread
     st.success("✅ Analisa dimulai, data real-time sedang berjalan...")
 
-# Tambah data terbaru dari latest_data ke session_state
+# Menambahkan data terbaru dari latest_data ke session_state
 if latest_data:
     new_rows = pd.DataFrame(latest_data)
     st.session_state.price_data = pd.concat([st.session_state.price_data, new_rows], ignore_index=True)
