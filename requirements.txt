@@ -9,4 +9,5 @@ tensorflow
 statsmodels
 keras
 joblib
-websockets
+websocket-client
+
