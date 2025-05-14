@@ -9,7 +9,7 @@ from datetime import datetime, timedelta
 st.set_page_config(page_title="AI BTC/ETH Signal Analyzer", layout="wide")
 st.sidebar.title("🔧 Pengaturan Analisa")
 
-# Sidebar inputs untuk pengaturan analisis
+# Sidebar inputs
 modal = st.sidebar.number_input("💰 Modal Anda ($)", value=1000.0, step=100.0)
 risk_pct = st.sidebar.slider("🎯 Risiko per Transaksi (%)", min_value=0.1, max_value=5.0, value=1.0)
 leverage = st.sidebar.number_input("⚙️ Leverage", min_value=1, max_value=125, value=10)
@@ -28,6 +28,8 @@ def get_kline_data(symbol, interval="60", limit=200):
     try:
         res = requests.get(url, params=params, timeout=10)
         data = res.json()
+        if "result" not in data or "list" not in data["result"]:
+            return pd.DataFrame()
         df = pd.DataFrame(data["result"]["list"])
         df.columns = ["timestamp", "open", "high", "low", "close", "volume", "turnover"]
         numeric_cols = ["open", "high", "low", "close", "volume", "turnover"]
@@ -53,22 +55,24 @@ def get_kline_data(symbol, interval="60", limit=200):
 
     return df
 
-# Fungsi untuk mendapatkan sinyal valid
 def get_valid_signal(df):
     df["signal"] = ""
-    # Tentukan sinyal berdasarkan indikator teknikal
+
+    # LONG: RSI rendah, harga pulih, MACD positif
     df.loc[
-        (df["rsi"] > 70) & (df["close"] > df["ema_fast"]) & (df["macd"] > 0), "signal"
-    ] = "SHORT"
-    
-    df.loc[
-        (df["rsi"] < 30) & (df["close"] < df["ema_fast"]) & (df["macd"] < 0), "signal"
+        (df["rsi"] < 30) & (df["close"] > df["ema_fast"]) & (df["macd"] > 0),
+        "signal"
     ] = "LONG"
-    # Ambil sinyal yang valid
+
+    # SHORT: RSI tinggi, harga turun, MACD negatif
+    df.loc[
+        (df["rsi"] > 70) & (df["close"] < df["ema_fast"]) & (df["macd"] < 0),
+        "signal"
+    ] = "SHORT"
+
     valid_signals = df[df["signal"] != ""]
     return valid_signals
 
-# Chart dengan Entry, Take Profit, Stop Loss
 def plot_chart(df, entry, stop_loss, take_profit):
     fig = go.Figure()
     fig.add_trace(go.Scatter(x=df.index, y=df["close"], name="Harga Aktual"))
@@ -78,25 +82,44 @@ def plot_chart(df, entry, stop_loss, take_profit):
     fig.update_layout(title="📈 Chart Harga, Entry, TP, SL", xaxis_title="Waktu", yaxis_title="Harga USD")
     st.plotly_chart(fig, use_container_width=True)
 
-# Menampilkan sinyal untuk BTC dan ETH
 def display_signals(symbol, timeframe):
-    df = get_kline_data(symbol, interval=timeframe)
-    if not df.empty:
-        valid_signals = get_valid_signal(df)
-        if not valid_signals.empty:
-            for idx, row in valid_signals.iterrows():
-                entry = row["close"]
-                stop_loss = entry * 0.98 if row["signal"] == "LONG" else entry * 1.02
-                take_profit = entry * 1.03 if row["signal"] == "LONG" else entry * 0.97
-                st.write(f"**{symbol}** - Signal {row['signal']} at {entry:.2f}")
-                plot_chart(df, entry, stop_loss, take_profit)
-        else:
-            st.write(f"Tidak ada sinyal valid untuk {symbol}")
-    else:
-        st.write(f"Gagal mengambil data untuk {symbol}")
+    with st.spinner(f"🔍 Mengambil data dan menganalisa sinyal untuk {symbol}..."):
+        df = get_kline_data(symbol, interval=timeframe)
+        if not df.empty:
+            valid_signals = get_valid_signal(df)
+            if not valid_signals.empty:
+                for idx, row in valid_signals.tail(3).iterrows():  # tampilkan hanya 3 sinyal terakhir
+                    entry = row["close"]
+                    sl_pct = 0.02
+                    tp_pct = 0.03
 
-# Button Analisis
-if st.sidebar.button("🚀 Mulai Analisis Sinyal"):
-    # Menampilkan sinyal untuk BTC dan ETH tanpa filter
+                    stop_loss = entry * (1 - sl_pct) if row["signal"] == "LONG" else entry * (1 + sl_pct)
+                    take_profit = entry * (1 + tp_pct) if row["signal"] == "LONG" else entry * (1 - tp_pct)
+
+                    stop_range = abs(entry - stop_loss)
+                    risk_amount = modal * (risk_pct / 100)
+                    position_size = (risk_amount / stop_range) * leverage
+
+                    potential_profit = abs(take_profit - entry) * position_size
+                    potential_loss = abs(entry - stop_loss) * position_size
+
+                    st.markdown(f"""
+                        ### 📍 {symbol} - Sinyal **{row['signal']}**
+                        ⏱️ Waktu: `{idx.strftime('%Y-%m-%d %H:%M')}`  
+                        💵 Entry: **${entry:.2f}**  
+                        🛑 Stop Loss: **${stop_loss:.2f}**  
+                        🎯 Take Profit: **${take_profit:.2f}**  
+                        📏 Ukuran Posisi: **{position_size:.4f} USDT**  
+                        ✅ Potensi Profit: **${potential_profit:.2f}**  
+                        ❌ Potensi Rugi: **${potential_loss:.2f}**
+                    """)
+                    plot_chart(df, entry, stop_loss, take_profit)
+            else:
+                st.info(f"Tidak ada sinyal valid untuk {symbol}")
+        else:
+            st.warning(f"Gagal mengambil data untuk {symbol}")
+
+# Tombol untuk memulai analisis
+if st.sidebar.button("🚀 Mulai Analisis Sinyal", use_container_width=True):
     display_signals("BTC", timeframe)
     display_signals("ETH", timeframe)
