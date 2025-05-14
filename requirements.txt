@@ -13,6 +13,8 @@ websocket-client
 binance-connector 
 binance-futures
 python-binance
+python-dotenv
+
 
 
 
