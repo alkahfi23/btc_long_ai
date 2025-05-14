@@ -4,24 +4,25 @@ import numpy as np
 import ta
 import plotly.graph_objects as go
 from binance.client import Client
-from binance.websocket.futures.websocket_client import FuturesWebsocketClient
+from binance.futures import FuturesWebsocketClient  # Gunakan FuturesWebsocketClient
 from datetime import datetime
 import requests
 import threading
 import time
 
+# Pengaturan Streamlit dan input
 st.set_page_config(page_title="AI Crypto Signal Analyzer", layout="wide")
 st.title("📊 AI Crypto Signal Analyzer (Real-Time Binance Futures)")
 st.sidebar.title("🔧 Pengaturan Analisa")
 
-# Ambil semua symbol USDT dari Binance Futures
+# Ambil semua symbol USDT dari Binance
 @st.cache_data(ttl=600)
 def get_binance_usdt_pairs():
-    url = "https://fapi.binance.com/fapi/v1/exchangeInfo"
+    url = "https://api.binance.com/api/v3/exchangeInfo"
     try:
         response = requests.get(url, timeout=10)
         data = response.json()
-        symbols = [s['symbol'] for s in data['symbols'] if s['quoteAsset'] == 'USDT' and s['contractType'] == 'PERPETUAL']
+        symbols = [s['symbol'] for s in data['symbols'] if s['quoteAsset'] == 'USDT' and s['status'] == 'TRADING']
         return sorted(symbols)
     except Exception as e:
         st.error(f"Gagal mengambil daftar pair: {e}")
@@ -45,7 +46,7 @@ if 'price_data' not in st.session_state:
 # Ambil data historis
 @st.cache_data(ttl=60)
 def fetch_initial_data(symbol, interval, limit=200):
-    url = f"https://fapi.binance.com/fapi/v1/klines?symbol={symbol}&interval={interval}&limit={limit}"
+    url = f"https://api.binance.com/api/v3/klines?symbol={symbol}&interval={interval}&limit={limit}"
     try:
         response = requests.get(url)
         klines = response.json()
@@ -78,18 +79,18 @@ def handle_socket_message(msg):
         }
         latest_data.append(candle)
 
-def start_binance_futures_socket():
-    ws = FuturesWebsocketClient(on_message=handle_socket_message)
+def start_binance_socket():
+    ws = FuturesWebsocketClient(on_message=handle_socket_message)  # Menggunakan FuturesWebsocketClient
     ws.kline(symbol=selected_pair.lower(), interval=timeframe)
 
     while True:
-        time.sleep(1)
+        time.sleep(1)  # Keep thread alive
 
 if start_analysis and 'ws_thread' not in st.session_state:
     with st.spinner("⏳ Mengambil data historis..."):
         st.session_state.price_data = fetch_initial_data(selected_pair, timeframe)
 
-    ws_thread = threading.Thread(target=start_binance_futures_socket, daemon=True)
+    ws_thread = threading.Thread(target=start_binance_socket, daemon=True)
     ws_thread.start()
     st.session_state.ws_thread = ws_thread
     st.success("✅ Analisa dimulai, data real-time sedang berjalan...")
@@ -164,4 +165,4 @@ if len(st.session_state.price_data) >= 20:
         st.info("🔍 Belum ada sinyal valid")
 
 else:
-    st.info("📡 Klik tombol 'Mulai Analisa' untuk memulai streaming data dari Binance Futures WebSocket")
+    st.info("📡 Klik tombol 'Mulai Analisa' untuk memulai streaming data dari Binance WebSocket")
