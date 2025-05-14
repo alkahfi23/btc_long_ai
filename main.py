@@ -36,6 +36,8 @@ risk_pct = st.sidebar.slider("🎯 Risiko per Transaksi (%)", 0.1, 5.0, 1.0)
 leverage = st.sidebar.number_input("⚙️ Leverage", min_value=1, max_value=125, value=10)
 margin_mode = st.sidebar.radio("💼 Mode Margin", ["Cross", "Isolated"], index=0)
 
+start_analysis = st.sidebar.button("🚀 Mulai Analisa")
+
 placeholder = st.empty()
 
 # Inisialisasi DataFrame global
@@ -106,7 +108,8 @@ def run_ws():
     ws = websocket.WebSocketApp(stream, on_message=on_message, on_error=on_error, on_close=on_close)
     ws.run_forever()
 
-# Jalankan WebSocket di thread terpisah
-threading.Thread(target=run_ws, daemon=True).start()
-
-st.info("📡 Mengambil data secara real-time dari Binance WebSocket")
+if start_analysis:
+    threading.Thread(target=run_ws, daemon=True).start()
+    st.success("✅ Analisa dimulai, data real-time sedang berjalan...")
+else:
+    st.info("📡 Klik tombol 'Mulai Analisa' untuk memulai streaming data dari Binance WebSocket")
