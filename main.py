@@ -1,17 +1,24 @@
+# main.py
 import streamlit as st
 import pandas as pd
+import numpy as np
 import requests
+import time
 import ta
 import plotly.graph_objects as go
-import time
+from datetime import datetime
 
-st.set_page_config(page_title="AI Crypto Signal Analyzer (Bybit Linear Futures)", layout="wide")
-st.title("📊 AI Crypto Signal Analyzer (Real-Time Bybit Linear Futures)")
+st.set_page_config(page_title="AI Crypto Signal Analyzer", layout="wide")
+st.title("📊 AI Crypto Signal Analyzer (Real-Time Bybit Futures)")
 st.sidebar.title("🔧 Pengaturan Analisa")
 
+# Pair dan Timeframe
 usdt_pairs = ["BTCUSDT", "ETHUSDT"]
 selected_pair = st.sidebar.selectbox("💱 Pilih Pair", usdt_pairs, index=0)
-timeframe = st.sidebar.selectbox("⏱️ Timeframe", ["1", "3", "5", "15", "30", "60", "120", "240", "360", "720", "D", "W"], index=0)  # Bybit interval format
+timeframe_map = {
+    "1m": "1", "5m": "5", "15m": "15", "30m": "30", "1h": "60"
+}
+selected_tf = st.sidebar.selectbox("⏱️ Timeframe", list(timeframe_map.keys()), index=0)
 modal = st.sidebar.number_input("💰 Modal ($)", value=1000.0)
 risk_pct = st.sidebar.slider("🎯 Risiko per Transaksi (%)", 0.1, 5.0, 1.0)
 leverage = st.sidebar.number_input("⚙️ Leverage", min_value=1, max_value=125, value=10)
@@ -25,27 +32,24 @@ if 'price_data' not in st.session_state:
 if 'last_fetch_time' not in st.session_state:
     st.session_state.last_fetch_time = 0
 
-def fetch_bybit_ohlcv(symbol, interval, limit=200):
-    # Bybit Linear Futures API v2 endpoint
-    url = "https://api.bybit.com/linear/public/quote/kline"
-    params = {
-        "symbol": symbol,
-        "interval": interval,
-        "limit": limit
-    }
+@st.cache_data(ttl=15)
+def fetch_initial_data(symbol="BTCUSDT", interval="1", limit=200):
     try:
+        url = "https://api.bybit.com/v2/public/kline/list"
+        params = {
+            "symbol": symbol,
+            "interval": interval,
+            "limit": limit
+        }
         response = requests.get(url, params=params, timeout=10)
         response.raise_for_status()
         data = response.json()
-        if data.get("ret_code") != 0:
-            st.error(f"API Error: {data.get('ret_msg', 'Unknown error')}")
+        if data["ret_code"] != 0:
+            st.error(f"API error: {data['ret_msg']}")
             return pd.DataFrame(columns=["timestamp", "open", "high", "low", "close"])
-        klines = data.get("result", {}).get("list", [])
-        if not klines:
-            st.error("Data klines kosong dari Bybit API")
-            return pd.DataFrame(columns=["timestamp", "open", "high", "low", "close"])
-        df = pd.DataFrame(klines)
-        df["timestamp"] = pd.to_datetime(df["start_at"], unit="s")
+
+        df = pd.DataFrame(data["result"])
+        df["timestamp"] = pd.to_datetime(df["open_time"], unit="s")
         df["open"] = df["open"].astype(float)
         df["high"] = df["high"].astype(float)
         df["low"] = df["low"].astype(float)
@@ -57,7 +61,7 @@ def fetch_bybit_ohlcv(symbol, interval, limit=200):
 
 current_time = time.time()
 if current_time - st.session_state.last_fetch_time > 15 or refresh_data:
-    st.session_state.price_data = fetch_bybit_ohlcv(selected_pair, timeframe)
+    st.session_state.price_data = fetch_initial_data(selected_pair, timeframe_map[selected_tf])
     st.session_state.last_fetch_time = current_time
 
 if start_analysis:
