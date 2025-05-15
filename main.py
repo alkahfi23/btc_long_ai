@@ -10,28 +10,13 @@ import time
 import json
 from websocket import WebSocketApp
 import os
-from dotenv import load_dotenv
-
-load_dotenv()
 
 st.set_page_config(page_title="AI Crypto Signal Analyzer", layout="wide")
-st.title("📊 AI Crypto Signal Analyzer (Real-Time Binance Futures)")
+st.title("📊 AI Crypto Signal Analyzer (Real-Time AscendEX Futures)")
 st.sidebar.title("🔧 Pengaturan Analisa")
 
-# Ambil semua symbol USDT dari Binance Futures
-@st.cache_data(ttl=600)
-def get_binance_usdt_pairs():
-    url = "https://fapi.binance.com/fapi/v1/exchangeInfo"
-    try:
-        response = requests.get(url, timeout=10)
-        data = response.json()
-        symbols = [s['symbol'] for s in data['symbols'] if s['quoteAsset'] == 'USDT' and s['contractType'] == 'PERPETUAL']
-        return sorted(symbols)
-    except Exception as e:
-        st.error(f"Gagal mengambil daftar pair: {e}")
-        return ["BTCUSDT", "ETHUSDT"]
-
-usdt_pairs = get_binance_usdt_pairs()
+# Gunakan hanya dua pair untuk AscendEX Futures
+usdt_pairs = ["BTCUSDT", "ETHUSDT"]
 
 selected_pair = st.sidebar.selectbox("💱 Pilih Pair", usdt_pairs, index=usdt_pairs.index("BTCUSDT"))
 timeframe = st.sidebar.selectbox("⏱️ Timeframe", ["1m", "5m", "15m", "30m", "1h"], index=0)
@@ -46,24 +31,26 @@ refresh_data = st.sidebar.button("🔄 Refresh Manual")
 if 'price_data' not in st.session_state:
     st.session_state.price_data = pd.DataFrame(columns=["timestamp", "open", "high", "low", "close"])
 
-# Ambil data historis
+# Ambil data historis dari AscendEX API (disesuaikan sesuai dokumentasi mereka)
 @st.cache_data(ttl=60)
 def fetch_initial_data(symbol, interval, limit=200):
-    url = f"https://fapi.binance.com/fapi/v1/klines?symbol={symbol}&interval={interval}&limit={limit}"
     try:
+        resolution = interval.replace("m", "").replace("h", "60")  # Convert to minutes
+        url = f"https://ascendex.com/api/pro/v1/futures/marketdata/candlestick?symbol={symbol}/PERP&interval={resolution}&n={limit}"
         response = requests.get(url)
-        klines = response.json()
-        data = pd.DataFrame([
+        data = response.json()
+        candles = data.get("data", {}).get("bars", [])
+        df = pd.DataFrame([
             {
-                "timestamp": pd.to_datetime(k[0], unit="ms"),
-                "open": float(k[1]),
-                "high": float(k[2]),
-                "low": float(k[3]),
-                "close": float(k[4])
+                "timestamp": pd.to_datetime(c[0], unit="s"),
+                "open": float(c[1]),
+                "high": float(c[2]),
+                "low": float(c[3]),
+                "close": float(c[4])
             }
-            for k in klines
+            for c in candles
         ])
-        return data
+        return df
     except Exception as e:
         st.error(f"Gagal mengambil data historis: {e}")
         return pd.DataFrame(columns=["timestamp", "open", "high", "low", "close"])
@@ -71,24 +58,26 @@ def fetch_initial_data(symbol, interval, limit=200):
 latest_data = []
 
 def handle_socket_message(msg):
-    if msg.get("k"):
-        k = msg["k"]
-        candle = {
-            "timestamp": pd.to_datetime(k['t'], unit='ms'),
-            "open": float(k['o']),
-            "high": float(k['h']),
-            "low": float(k['l']),
-            "close": float(k['c'])
-        }
-        latest_data.append(candle)
-        # Update harga real-time di sidebar
-        st.session_state.last_price = float(k['c'])
+    try:
+        data = json.loads(msg)
+        if "m" in data:
+            market_data = data["m"]
+            candle = {
+                "timestamp": pd.to_datetime(int(market_data["ts"])/1000, unit='s'),
+                "open": float(market_data["o"]),
+                "high": float(market_data["h"]),
+                "low": float(market_data["l"]),
+                "close": float(market_data["c"])
+            }
+            latest_data.append(candle)
+            st.session_state.last_price = float(market_data["c"])
+    except Exception as e:
+        print(f"WebSocket message error: {e}")
 
 
-def start_binance_futures_socket():
+def start_ascendex_futures_socket():
     def on_message(ws, message):
-        msg = json.loads(message)
-        handle_socket_message(msg)
+        handle_socket_message(message)
 
     def on_error(ws, error):
         print(f"WebSocket error: {error}")
@@ -96,16 +85,22 @@ def start_binance_futures_socket():
     def on_close(ws, close_status_code, close_msg):
         print("WebSocket closed")
 
-    symbol_lower = selected_pair.lower()
-    socket_url = f"wss://fstream.binance.com/ws/{symbol_lower}@kline_{timeframe}"
-    ws_app = WebSocketApp(socket_url, on_message=on_message, on_error=on_error, on_close=on_close)
+    base_url = "wss://ascendex.com/1/api/pro/v1/stream"
+    symbol = selected_pair + "/PERP"
+    channel = f"bar:{symbol}:{timeframe}"
+    payload = json.dumps({"op": "sub", "id": "1", "ch": channel})
+
+    def on_open(ws):
+        ws.send(payload)
+
+    ws_app = WebSocketApp(base_url, on_open=on_open, on_message=on_message, on_error=on_error, on_close=on_close)
     ws_app.run_forever()
 
 if start_analysis and 'ws_thread' not in st.session_state:
     with st.spinner("⏳ Mengambil data historis..."):
         st.session_state.price_data = fetch_initial_data(selected_pair, timeframe)
 
-    ws_thread = threading.Thread(target=start_binance_futures_socket, daemon=True)
+    ws_thread = threading.Thread(target=start_ascendex_futures_socket, daemon=True)
     ws_thread.start()
     st.session_state.ws_thread = ws_thread
     st.success("✅ Analisa dimulai, data real-time sedang berjalan...")
@@ -185,4 +180,4 @@ if len(st.session_state.price_data) >= 20:
         st.info("🔍 Belum ada sinyal valid")
 
 else:
-    st.info("📡 Klik tombol 'Mulai Analisa' untuk memulai streaming data dari Binance Futures WebSocket")
+    st.info("📡 Klik tombol 'Mulai Analisa' untuk memulai streaming data dari AscendEX Futures WebSocket")
