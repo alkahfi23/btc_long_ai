@@ -141,6 +141,7 @@ if start_analysis and 'ws_thread' not in st.session_state:
     st.session_state.ws_thread = True
     st.success("✅ Analisa dimulai, data real-time sedang berjalan...")
 
+
 # (bagian analisis dan visualisasi tetap sama, tidak perlu diubah)
 
 if latest_data:
