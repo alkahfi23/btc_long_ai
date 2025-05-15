@@ -1,19 +1,11 @@
 streamlit
 pandas
-requests
-plotly
-ta
 numpy
-scikit-learn
-tensorflow
-statsmodels
-keras
-joblib
+ta
+plotly
 websocket-client
-binance-connector 
-binance-futures
-python-binance
-python-dotenv
+requests
+
 
 
 
