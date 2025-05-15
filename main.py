@@ -1,18 +1,17 @@
-# main.py
 import streamlit as st
 import pandas as pd
-import time
 import requests
 import ta
 import plotly.graph_objects as go
+import time
 
-st.set_page_config(page_title="AI Crypto Signal Analyzer (Bybit Futures)", layout="wide")
-st.title("📊 AI Crypto Signal Analyzer (Real-Time Bybit Futures)")
+st.set_page_config(page_title="AI Crypto Signal Analyzer (Bybit Linear Futures)", layout="wide")
+st.title("📊 AI Crypto Signal Analyzer (Real-Time Bybit Linear Futures)")
 st.sidebar.title("🔧 Pengaturan Analisa")
 
 usdt_pairs = ["BTCUSDT", "ETHUSDT"]
 selected_pair = st.sidebar.selectbox("💱 Pilih Pair", usdt_pairs, index=0)
-timeframe = st.sidebar.selectbox("⏱️ Timeframe", ["1", "3", "5", "15", "30", "60"], index=0)  # sesuai Bybit API intervals
+timeframe = st.sidebar.selectbox("⏱️ Timeframe", ["1", "3", "5", "15", "30", "60", "120", "240", "360", "720", "D", "W"], index=0)  # Bybit interval format
 modal = st.sidebar.number_input("💰 Modal ($)", value=1000.0)
 risk_pct = st.sidebar.slider("🎯 Risiko per Transaksi (%)", 0.1, 5.0, 1.0)
 leverage = st.sidebar.number_input("⚙️ Leverage", min_value=1, max_value=125, value=10)
@@ -27,7 +26,8 @@ if 'last_fetch_time' not in st.session_state:
     st.session_state.last_fetch_time = 0
 
 def fetch_bybit_ohlcv(symbol, interval, limit=200):
-    url = "https://api.bybit.com/public/linear/kline"
+    # Bybit Linear Futures API v2 endpoint
+    url = "https://api.bybit.com/linear/public/quote/kline"
     params = {
         "symbol": symbol,
         "interval": interval,
@@ -40,12 +40,12 @@ def fetch_bybit_ohlcv(symbol, interval, limit=200):
         if data.get("ret_code") != 0:
             st.error(f"API Error: {data.get('ret_msg', 'Unknown error')}")
             return pd.DataFrame(columns=["timestamp", "open", "high", "low", "close"])
-        klines = data.get("result", [])
+        klines = data.get("result", {}).get("list", [])
         if not klines:
             st.error("Data klines kosong dari Bybit API")
             return pd.DataFrame(columns=["timestamp", "open", "high", "low", "close"])
         df = pd.DataFrame(klines)
-        df["timestamp"] = pd.to_datetime(df["open_time"], unit="s")
+        df["timestamp"] = pd.to_datetime(df["start_at"], unit="s")
         df["open"] = df["open"].astype(float)
         df["high"] = df["high"].astype(float)
         df["low"] = df["low"].astype(float)
