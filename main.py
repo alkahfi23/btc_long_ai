@@ -1,21 +1,18 @@
+# main.py
 import streamlit as st
 import pandas as pd
-import numpy as np
+import time
+import requests
 import ta
 import plotly.graph_objects as go
-from datetime import datetime
-import requests
-import time
 
-st.set_page_config(page_title="AI Crypto Signal Analyzer", layout="wide")
-st.title("📊 AI Crypto Signal Analyzer (Real-Time AscendEX Futures)")
+st.set_page_config(page_title="AI Crypto Signal Analyzer (Bybit Futures)", layout="wide")
+st.title("📊 AI Crypto Signal Analyzer (Real-Time Bybit Futures)")
 st.sidebar.title("🔧 Pengaturan Analisa")
 
-# Gunakan hanya dua pair untuk AscendEX Futures
 usdt_pairs = ["BTCUSDT", "ETHUSDT"]
-
-selected_pair = st.sidebar.selectbox("💱 Pilih Pair", usdt_pairs, index=usdt_pairs.index("BTCUSDT"))
-timeframe = st.sidebar.selectbox("⏱️ Timeframe", ["1m", "5m", "15m", "30m", "1h"], index=0)
+selected_pair = st.sidebar.selectbox("💱 Pilih Pair", usdt_pairs, index=0)
+timeframe = st.sidebar.selectbox("⏱️ Timeframe", ["1", "3", "5", "15", "30", "60"], index=0)  # sesuai Bybit API intervals
 modal = st.sidebar.number_input("💰 Modal ($)", value=1000.0)
 risk_pct = st.sidebar.slider("🎯 Risiko per Transaksi (%)", 0.1, 5.0, 1.0)
 leverage = st.sidebar.number_input("⚙️ Leverage", min_value=1, max_value=125, value=10)
@@ -29,45 +26,43 @@ if 'price_data' not in st.session_state:
 if 'last_fetch_time' not in st.session_state:
     st.session_state.last_fetch_time = 0
 
-@st.cache_data(ttl=60)
-def fetch_initial_data(symbol, interval, limit=200):
+def fetch_bybit_ohlcv(symbol, interval, limit=200):
+    url = "https://api.bybit.com/public/linear/kline"
+    params = {
+        "symbol": symbol,
+        "interval": interval,
+        "limit": limit
+    }
     try:
-        interval_map = {
-            "1m": "1",
-            "5m": "5",
-            "15m": "15",
-            "30m": "30",
-            "1h": "60"
-        }
-        resolution = interval_map.get(interval, "1")
-        url = f"https://ascendex.com/api/pro/v1/futures/marketdata/candlestick?symbol={symbol.lower()}/perp&interval={resolution}&n={limit}"
-        response = requests.get(url)
+        response = requests.get(url, params=params, timeout=10)
+        response.raise_for_status()
         data = response.json()
-        candles = data.get("data", {}).get("bars", [])
-        df = pd.DataFrame([
-            {
-                "timestamp": pd.to_datetime(c[0], unit="s"),
-                "open": float(c[1]),
-                "high": float(c[2]),
-                "low": float(c[3]),
-                "close": float(c[4])
-            }
-            for c in candles
-        ])
-        return df
+        if data.get("ret_code") != 0:
+            st.error(f"API Error: {data.get('ret_msg', 'Unknown error')}")
+            return pd.DataFrame(columns=["timestamp", "open", "high", "low", "close"])
+        klines = data.get("result", [])
+        if not klines:
+            st.error("Data klines kosong dari Bybit API")
+            return pd.DataFrame(columns=["timestamp", "open", "high", "low", "close"])
+        df = pd.DataFrame(klines)
+        df["timestamp"] = pd.to_datetime(df["open_time"], unit="s")
+        df["open"] = df["open"].astype(float)
+        df["high"] = df["high"].astype(float)
+        df["low"] = df["low"].astype(float)
+        df["close"] = df["close"].astype(float)
+        return df[["timestamp", "open", "high", "low", "close"]]
     except Exception as e:
-        st.error(f"Gagal mengambil data historis: {e}")
+        st.error(f"Gagal ambil data OHLCV: {e}")
         return pd.DataFrame(columns=["timestamp", "open", "high", "low", "close"])
 
 current_time = time.time()
 if current_time - st.session_state.last_fetch_time > 15 or refresh_data:
-    st.session_state.price_data = fetch_initial_data(selected_pair, timeframe)
+    st.session_state.price_data = fetch_bybit_ohlcv(selected_pair, timeframe)
     st.session_state.last_fetch_time = current_time
 
 if start_analysis:
     st.success("✅ Data diambil, chart dan analisa ditampilkan di bawah.")
 
-# Tampilkan chart dengan indikator
 if len(st.session_state.price_data) >= 20:
     df = st.session_state.price_data.copy()
     df.set_index("timestamp", inplace=True)
@@ -128,4 +123,4 @@ if len(st.session_state.price_data) >= 20:
     else:
         st.info("🔍 Belum ada sinyal valid")
 else:
-    st.info("📡 Klik tombol 'Mulai Analisa' untuk memulai polling data dari AscendEX")
+    st.info("📡 Klik tombol 'Mulai Analisa' untuk memulai polling data dari Bybit")
