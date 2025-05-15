@@ -35,8 +35,9 @@ if 'last_fetch_time' not in st.session_state:
 @st.cache_data(ttl=15)
 def fetch_initial_data(symbol="BTCUSDT", interval="1", limit=200):
     try:
-        url = "https://api.bybit.com/v2/public/kline/list"
+        url = "https://api.bybit.com/v5/market/kline"
         params = {
+            "category": "linear",  # USDT Perpetual
             "symbol": symbol,
             "interval": interval,
             "limit": limit
@@ -44,20 +45,23 @@ def fetch_initial_data(symbol="BTCUSDT", interval="1", limit=200):
         response = requests.get(url, params=params, timeout=10)
         response.raise_for_status()
         data = response.json()
-        if data["ret_code"] != 0:
-            st.error(f"API error: {data['ret_msg']}")
+
+        if data["retCode"] != 0:
+            st.error(f"API error: {data['retMsg']}")
             return pd.DataFrame(columns=["timestamp", "open", "high", "low", "close"])
 
-        df = pd.DataFrame(data["result"])
-        df["timestamp"] = pd.to_datetime(df["open_time"], unit="s")
+        df = pd.DataFrame(data["result"]["list"])
+        df.columns = ["open_time", "open", "high", "low", "close", "volume", "turnover"]
+        df["timestamp"] = pd.to_datetime(df["open_time"].astype(int), unit="ms")
         df["open"] = df["open"].astype(float)
         df["high"] = df["high"].astype(float)
         df["low"] = df["low"].astype(float)
         df["close"] = df["close"].astype(float)
-        return df[["timestamp", "open", "high", "low", "close"]]
+        return df[["timestamp", "open", "high", "low", "close"]].sort_values("timestamp")
     except Exception as e:
         st.error(f"Gagal ambil data OHLCV: {e}")
         return pd.DataFrame(columns=["timestamp", "open", "high", "low", "close"])
+
 
 current_time = time.time()
 if current_time - st.session_state.last_fetch_time > 15 or refresh_data:
